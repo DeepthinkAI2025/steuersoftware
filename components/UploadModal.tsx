@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react';
-import { Document, DocumentSource, DocumentStatus, InvoiceType, Rule, RuleSuggestion } from '../types';
-import { analyzeDocument, getDocumentStatusFromAnalysis, createSuggestedFileName } from '../services/geminiService';
+import { Document, DocumentSource, DocumentStatus, InvoiceType, Rule, RuleSuggestion, DEFAULT_DIGITAL_STORAGE_ID } from '../types';
+import { analyzeDocument, getDocumentStatusFromAnalysis, createSuggestedFileName, buildOcrMetadataFromAnalysis } from '../services/geminiService';
 import { UploadCloudIcon } from './icons/UploadCloudIcon';
 import { ComputerIcon } from './icons/ComputerIcon';
 import { XIcon } from './icons/XIcon';
@@ -34,18 +34,21 @@ const UploadModal: React.FC<UploadModalProps> = ({ onClose, setDocuments, rules,
     setDocuments(prevDocs => {
         const source = mode === 'manual' ? DocumentSource.MANUAL : DocumentSource.LOCAL;
 
-        const placeholderDocs: Document[] = files.map(file => ({
-            id: `temp-${Math.random().toString(36).substr(2, 9)}`,
-            name: file.name,
-            date: new Date(),
-            year: new Date().getFullYear(),
-            quarter: Math.floor((new Date().getMonth() + 3) / 3),
-            source: source,
-            status: DocumentStatus.ANALYZING,
-            fileUrl: URL.createObjectURL(file),
-            file: file,
-            invoiceType: InvoiceType.INCOMING,
-        }));
+    const placeholderDocs: Document[] = files.map(file => ({
+      id: `temp-${Math.random().toString(36).substr(2, 9)}`,
+      name: file.name,
+      date: new Date(),
+      year: new Date().getFullYear(),
+      quarter: Math.floor((new Date().getMonth() + 3) / 3),
+      source: source,
+      status: DocumentStatus.ANALYZING,
+      fileUrl: URL.createObjectURL(file),
+      file: file,
+      invoiceType: InvoiceType.INCOMING,
+      storageLocationId: DEFAULT_DIGITAL_STORAGE_ID,
+      tags: [],
+      linkedTransactionIds: [],
+    }));
 
         let suggestionMade = false;
         const analysisPromises = files.map(async (file, index) => {
@@ -53,24 +56,34 @@ const UploadModal: React.FC<UploadModalProps> = ({ onClose, setDocuments, rules,
                 const result = await analyzeDocument(file, rules, apiKey);
                 const date = new Date(result.documentDate || Date.now());
                 const originalExtension = file.name.split('.').pop() || 'pdf';
-                const status = getDocumentStatusFromAnalysis(result, prevDocs);
+        const status = getDocumentStatusFromAnalysis(result, prevDocs);
+        const metadata = buildOcrMetadataFromAnalysis(result);
+        const storageLocationId = result.suggestedStorageLocationId || placeholderDocs[index].storageLocationId || DEFAULT_DIGITAL_STORAGE_ID;
+        const tagSet = new Set<string>([
+          ...(placeholderDocs[index].tags || []),
+          result.taxCategory || '',
+          result.vendor || '',
+        ].filter(Boolean));
 
-                const finalDoc: Document = {
-                    id: placeholderDocs[index].id,
-                    name: createSuggestedFileName(result, originalExtension),
-                    date: date,
-                    year: date.getFullYear(),
-                    quarter: Math.floor((date.getMonth() + 3) / 3),
-                    source: source, status, file,
-                    fileUrl: URL.createObjectURL(file),
-                    textContent: result.textContent,
-                    vendor: result.vendor,
-                    totalAmount: result.totalAmount,
-                    vatAmount: result.vatAmount,
-                    invoiceNumber: result.invoiceNumber,
-                    invoiceType: result.invoiceType,
-                    taxCategory: result.taxCategory,
-                };
+        const finalDoc: Document = {
+          ...placeholderDocs[index],
+          name: createSuggestedFileName(result, originalExtension),
+          date,
+          year: date.getFullYear(),
+          quarter: Math.floor((date.getMonth() + 3) / 3),
+          status,
+          source,
+          textContent: result.textContent,
+          vendor: result.vendor,
+          totalAmount: result.totalAmount,
+          vatAmount: result.vatAmount,
+          invoiceNumber: result.invoiceNumber,
+          invoiceType: result.invoiceType,
+          taxCategory: result.taxCategory,
+          ocrMetadata: metadata,
+          storageLocationId,
+          tags: Array.from(tagSet),
+        };
 
                 if (!suggestionMade && finalDoc.vendor && finalDoc.taxCategory && finalDoc.taxCategory !== 'Sonstiges') {
                     onRuleSuggestion({
@@ -85,17 +98,16 @@ const UploadModal: React.FC<UploadModalProps> = ({ onClose, setDocuments, rules,
             } catch (error) {
                 const errorMessage = error instanceof Error ? error.message : "Unbekannter Analysefehler.";
                 const errorDoc: Document = {
-                    id: placeholderDocs[index].id,
-                    name: file.name,
-                    date: new Date(),
-                    year: new Date().getFullYear(),
-                    quarter: Math.floor((new Date().getMonth() + 3) / 3),
-                    source,
-                    status: DocumentStatus.ERROR,
-                    errorMessage,
-                    fileUrl: URL.createObjectURL(file),
-                    file,
-                    invoiceType: InvoiceType.INCOMING,
+          ...placeholderDocs[index],
+          name: file.name,
+          date: new Date(),
+          year: new Date().getFullYear(),
+          quarter: Math.floor((new Date().getMonth() + 3) / 3),
+          source,
+          status: DocumentStatus.ERROR,
+          errorMessage,
+          invoiceType: InvoiceType.INCOMING,
+          ocrMetadata: undefined,
                 };
                 return errorDoc;
             }

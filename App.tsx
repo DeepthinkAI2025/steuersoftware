@@ -1,21 +1,28 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, lazy, Suspense } from 'react';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
-import DocumentsView from './components/DocumentsView';
-import SettingsView from './components/SettingsView';
-import AnalysisView from './components/AnalysisView';
-import RulesView from './components/RulesView';
-import DeadlinesView from './components/DeadlinesView';
-import LexofficeView from './components/LexofficeView';
-import ProfileView from './components/ProfileView';
 import LoginView from './components/LoginView';
 import RuleSuggestionToast from './components/RuleSuggestionToast';
-import ChatPanel from './components/ChatPanel';
-import DocumentDetailModal from './components/DocumentDetailModal';
 import DeadlineNotification from './components/DeadlineNotification';
-import FörderungenView from './components/FörderungenView';
-import { Document, View, Rule, InvoiceType, RuleSuggestion, NotificationSettings, Deadline, UserProfile, DocumentFilter } from './types';
+import ErrorBoundary from './components/ErrorBoundary';
+import { Document, DocumentStatus, View, Rule, InvoiceType, RuleSuggestion, NotificationSettings, Deadline, UserProfile, DocumentFilter, AccountingTransaction, TransactionStatus, TransactionSource, TaskItem, TaskStatus, TaskPriority, StorageLocation, StorageLocationType, DEFAULT_DIGITAL_STORAGE_ID } from './types';
 import { getDeadlines } from './services/deadlineService';
+import { analyzeDocument, getDocumentStatusFromAnalysis, buildOcrMetadataFromAnalysis } from './services/geminiService';
+
+// Lazy load heavy components
+const DocumentsView = lazy(() => import('./components/DocumentsView'));
+const SettingsView = lazy(() => import('./components/SettingsView'));
+const AnalysisView = lazy(() => import('./components/AnalysisView'));
+const RulesView = lazy(() => import('./components/RulesView'));
+const DeadlinesView = lazy(() => import('./components/DeadlinesView'));
+const LexofficeView = lazy(() => import('./components/LexofficeView'));
+const IncomeStatementView = lazy(() => import('./components/IncomeStatementView'));
+const TaxFilingsView = lazy(() => import('./components/TaxFilingsView'));
+const ProfileView = lazy(() => import('./components/ProfileView'));
+const FörderungenView = lazy(() => import('./components/FörderungenView'));
+const AccountingView = lazy(() => import('./components/AccountingView'));
+const ChatPanel = lazy(() => import('./components/ChatPanel'));
+const DocumentDetailModal = lazy(() => import('./components/DocumentDetailModal'));
 
 const initialRules: Rule[] = [
     { id: 'sys-1a', conditionType: 'textContent', conditionValue: 'ZOE Solar', invoiceType: InvoiceType.OUTGOING, resultCategory: 'Photovoltaik' },
@@ -59,6 +66,84 @@ Wenn der Benutzer dich bittet, eine Aktion auszuführen (z.B. "sende an lexoffic
 - Du kannst erklären, warum ein Beleg aufgrund einer Regel eine bestimmte Kategorie erhalten hat.
 - **SEHR WICHTIG:** Du bist ein KI-Assistent, kein zertifizierter Steuerberater. Füge bei jeder Antwort, die steuerliche Fristen oder Ratschläge betrifft, immer einen kurzen Hinweis hinzu, z.B.: "(Bitte beachten Sie: Dies ist keine rechtsverbindliche Steuerberatung.)"`;
 
+const DEFAULT_STORAGE_LOCATIONS: StorageLocation[] = [
+  { id: DEFAULT_DIGITAL_STORAGE_ID, label: 'Digitale Ablage', type: StorageLocationType.DIGITAL, description: 'Standardablage für digital erfasste Belege', isDefault: true },
+  { id: 'storage-default-lexoffice', label: 'Lexoffice', type: StorageLocationType.LEXOFFICE, description: 'Automatischer Abgleich mit Lexoffice' },
+  { id: 'storage-default-physical', label: 'Physischer Ordner', type: StorageLocationType.PHYSICAL, description: 'Physisch abgelegte Dokumente im Büro' },
+  { id: 'storage-default-archive', label: 'Archiv', type: StorageLocationType.ARCHIVE, description: 'Abgelegte Dokumente außerhalb des aktiven Workflows' },
+];
+
+const STORAGE_KEYS = {
+  transactions: 'accountingTransactions',
+  tasks: 'accountingTasks',
+  storageLocations: 'storageLocations',
+};
+
+const isBrowser = typeof window !== 'undefined';
+
+const toDate = (value: any): Date => {
+  if (!value) return new Date();
+  const parsed = new Date(value);
+  return isNaN(parsed.getTime()) ? new Date() : parsed;
+};
+
+const deserializeTransaction = (raw: any): AccountingTransaction => ({
+  ...raw,
+  date: toDate(raw.date),
+  createdAt: toDate(raw.createdAt),
+  updatedAt: toDate(raw.updatedAt),
+});
+
+const deserializeTask = (raw: any): TaskItem => ({
+  ...raw,
+  createdAt: toDate(raw.createdAt),
+  completedAt: raw.completedAt ? toDate(raw.completedAt) : undefined,
+  dueDate: raw.dueDate ? toDate(raw.dueDate) : undefined,
+});
+
+const loadTransactionsFromStorage = (): AccountingTransaction[] => {
+  if (!isBrowser) return [];
+  const stored = localStorage.getItem(STORAGE_KEYS.transactions);
+  if (!stored) return [];
+  try {
+    const parsed = JSON.parse(stored);
+    return Array.isArray(parsed) ? parsed.map(deserializeTransaction) : [];
+  } catch (error) {
+    console.warn('Konnte gespeicherte Transaktionen nicht laden:', error);
+    return [];
+  }
+};
+
+const loadTasksFromStorage = (): TaskItem[] => {
+  if (!isBrowser) return [];
+  const stored = localStorage.getItem(STORAGE_KEYS.tasks);
+  if (!stored) return [];
+  try {
+    const parsed = JSON.parse(stored);
+    return Array.isArray(parsed) ? parsed.map(deserializeTask) : [];
+  } catch (error) {
+    console.warn('Konnte gespeicherte Aufgaben nicht laden:', error);
+    return [];
+  }
+};
+
+const loadStorageLocationsFromStorage = (): StorageLocation[] => {
+  if (!isBrowser) return DEFAULT_STORAGE_LOCATIONS;
+  const stored = localStorage.getItem(STORAGE_KEYS.storageLocations);
+  if (!stored) return DEFAULT_STORAGE_LOCATIONS;
+  try {
+    const parsed = JSON.parse(stored);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed;
+    }
+    return DEFAULT_STORAGE_LOCATIONS;
+  } catch (error) {
+    console.warn('Konnte gespeicherte Ablageorte nicht laden:', error);
+    return DEFAULT_STORAGE_LOCATIONS;
+  }
+};
+
+
 
 const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => sessionStorage.getItem('isAuthenticated') === 'true');
@@ -77,6 +162,7 @@ const App: React.FC = () => {
   const [lexofficeApiKey, setLexofficeApiKey] = useState<string>(() => localStorage.getItem('lexofficeApiKey') || '');
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
   const [documentToView, setDocumentToView] = useState<Document | null>(null);
+  const [reanalyzingDocumentIds, setReanalyzingDocumentIds] = useState<string[]>([]);
   const [chatSystemPrompt, setChatSystemPrompt] = useState<string>(() => localStorage.getItem('chatSystemPrompt') || DEFAULT_CHAT_PROMPT);
   const [userProfile, setUserProfile] = useState<UserProfile>(() => {
     const saved = localStorage.getItem('userProfile');
@@ -90,6 +176,9 @@ const App: React.FC = () => {
   });
   const [deadlines, setDeadlines] = useState<Deadline[]>([]);
   const [activeNotification, setActiveNotification] = useState<Deadline | null>(null);
+  const [transactions, setTransactions] = useState<AccountingTransaction[]>(() => loadTransactionsFromStorage());
+  const [tasks, setTasks] = useState<TaskItem[]>(() => loadTasksFromStorage());
+  const [storageLocations, setStorageLocations] = useState<StorageLocation[]>(() => loadStorageLocationsFromStorage());
 
   const handleLogin = () => {
     setIsAuthenticated(true);
@@ -123,6 +212,116 @@ const App: React.FC = () => {
   }, [userProfile]);
 
   useEffect(() => {
+    if (!isBrowser) return;
+    localStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify(transactions));
+  }, [transactions]);
+
+  useEffect(() => {
+    if (!isBrowser) return;
+    localStorage.setItem(STORAGE_KEYS.tasks, JSON.stringify(tasks));
+  }, [tasks]);
+
+  useEffect(() => {
+    if (!isBrowser) return;
+    localStorage.setItem(STORAGE_KEYS.storageLocations, JSON.stringify(storageLocations));
+  }, [storageLocations]);
+
+  useEffect(() => {
+    setTransactions(prevTransactions => {
+      const documentIds = new Set(documents.map(doc => doc.id));
+      let hasChange = false;
+      const updatedTransactions = prevTransactions.map(tx => {
+        if (tx.documentId && !documentIds.has(tx.documentId)) {
+          hasChange = true;
+          return {
+            ...tx,
+            documentId: undefined,
+            status: TransactionStatus.MISSING_RECEIPT,
+            updatedAt: new Date(),
+          };
+        }
+        return tx;
+      });
+      return hasChange ? updatedTransactions : prevTransactions;
+    });
+  }, [documents]);
+
+  useEffect(() => {
+    setDocuments(prevDocs => {
+      const linkedByDoc = new Map<string, string[]>();
+      transactions.forEach(tx => {
+        if (tx.documentId) {
+          const list = linkedByDoc.get(tx.documentId) || [];
+          list.push(tx.id);
+          linkedByDoc.set(tx.documentId, list);
+        }
+      });
+
+      let changed = false;
+      const updatedDocs = prevDocs.map(doc => {
+        const linkedIds = linkedByDoc.get(doc.id) || [];
+        const currentIds = doc.linkedTransactionIds || [];
+        const sameLength = currentIds.length === linkedIds.length;
+        const sameMembers = sameLength && currentIds.every(id => linkedIds.includes(id));
+        if (!sameMembers) {
+          changed = true;
+          return { ...doc, linkedTransactionIds: linkedIds };
+        }
+        return doc;
+      });
+      return changed ? updatedDocs : prevDocs;
+    });
+  }, [transactions, setDocuments]);
+
+  useEffect(() => {
+    const now = new Date();
+    setTasks(prevTasks => {
+      const missingTransactions = transactions.filter(tx => tx.status === TransactionStatus.MISSING_RECEIPT);
+      const missingIds = new Set(missingTransactions.map(tx => tx.id));
+
+      let changed = false;
+      const nextTasks: TaskItem[] = [];
+
+      prevTasks.forEach(task => {
+        if (task.relatedTransactionId) {
+          if (missingIds.has(task.relatedTransactionId)) {
+            nextTasks.push(task);
+            missingIds.delete(task.relatedTransactionId);
+          } else {
+            if (task.status !== TaskStatus.DONE) {
+              changed = true;
+              nextTasks.push({ ...task, status: TaskStatus.DONE, completedAt: task.completedAt || now });
+            } else {
+              nextTasks.push(task);
+            }
+          }
+        } else {
+          nextTasks.push(task);
+        }
+      });
+
+      missingIds.forEach(txId => {
+        const tx = transactions.find(t => t.id === txId);
+        if (!tx) return;
+        changed = true;
+        const priority = Math.abs(tx.amount) >= 1000 ? TaskPriority.HIGH : TaskPriority.MEDIUM;
+        nextTasks.push({
+          id: `task-${tx.id}`,
+          title: `Beleg für ${tx.description || 'Transaktion'} beschaffen`,
+          description: `Bitte laden Sie den fehlenden Beleg für die Transaktion vom ${tx.date.toLocaleDateString('de-DE')} (${tx.amount.toFixed(2)} €) nach.`,
+          status: TaskStatus.OPEN,
+          priority,
+          relatedTransactionId: tx.id,
+          dueDate: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+          createdAt: now,
+        });
+      });
+
+      return changed ? nextTasks : prevTasks;
+    });
+  }, [transactions]);
+
+  useEffect(() => {
     const calculatedDeadlines = getDeadlines();
     setDeadlines(calculatedDeadlines);
 
@@ -145,6 +344,16 @@ const App: React.FC = () => {
       return doc.year === activeFilter.year;
     });
   }, [documents, activeFilter]);
+
+  const upcomingTaxSubmissions = useMemo(
+    () =>
+      deadlines.map(deadline => ({
+        title: deadline.title,
+        dueDate: deadline.dueDate,
+        status: deadline.remainingDays < 0 ? 'overdue' : 'open',
+      })),
+    [deadlines]
+  );
 
   const handleSetRuleSuggestion = (suggestion: RuleSuggestion) => {
     const similarRuleExists = rules.some(rule => {
@@ -188,12 +397,103 @@ const App: React.FC = () => {
     );
   };
 
+  const handleReanalyzeDocument = useCallback(async (document: Document) => {
+  if (!document.file) {
+    throw new Error('Für dieses Dokument liegt keine Originaldatei vor.');
+  }
+  if (!apiKey) {
+    throw new Error('Bitte hinterlegen Sie zuerst Ihren Gemini API-Schlüssel.');
+  }
+
+  setReanalyzingDocumentIds(prev => (prev.includes(document.id) ? prev : [...prev, document.id]));
+  setDocuments(prevDocs => prevDocs.map(doc => doc.id === document.id ? { ...doc, status: DocumentStatus.ANALYZING, errorMessage: undefined } : doc));
+
+  try {
+    const analysis = await analyzeDocument(document.file, rules, apiKey);
+    const metadata = buildOcrMetadataFromAnalysis(analysis);
+
+    setDocuments(prevDocs => {
+      const otherDocs = prevDocs.filter(doc => doc.id !== document.id);
+      const status = getDocumentStatusFromAnalysis(analysis, otherDocs);
+
+      return prevDocs.map(existing => {
+        if (existing.id !== document.id) return existing;
+
+        const tags = new Set<string>([
+          ...(existing.tags || []),
+          analysis.taxCategory || '',
+          analysis.vendor || '',
+        ].filter(Boolean));
+
+        const updated: Document = {
+          ...existing,
+          status,
+          textContent: analysis.textContent,
+          ocrMetadata: metadata,
+          errorMessage: undefined,
+        };
+
+        if (analysis.documentDate) {
+          const parsedDate = new Date(analysis.documentDate);
+          if (!Number.isNaN(parsedDate.getTime())) {
+            updated.date = parsedDate;
+            updated.year = parsedDate.getFullYear();
+            updated.quarter = Math.floor((parsedDate.getMonth() + 3) / 3);
+          }
+        }
+
+        if (!existing.vendor && analysis.vendor) updated.vendor = analysis.vendor;
+        if ((!existing.totalAmount || existing.totalAmount === 0) && typeof analysis.totalAmount === 'number') updated.totalAmount = analysis.totalAmount;
+        if ((!existing.vatAmount || existing.vatAmount === 0) && typeof analysis.vatAmount === 'number') updated.vatAmount = analysis.vatAmount;
+        if (!existing.invoiceNumber && analysis.invoiceNumber) updated.invoiceNumber = analysis.invoiceNumber;
+        if (!existing.taxCategory || existing.taxCategory === 'Sonstiges') updated.taxCategory = analysis.taxCategory || existing.taxCategory;
+        if (!existing.invoiceType) updated.invoiceType = analysis.invoiceType;
+        if (!existing.storageLocationId) updated.storageLocationId = analysis.suggestedStorageLocationId || DEFAULT_DIGITAL_STORAGE_ID;
+
+        updated.tags = Array.from(tags);
+
+        return updated;
+      });
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Analyse fehlgeschlagen.';
+    setDocuments(prevDocs => prevDocs.map(doc => doc.id === document.id ? { ...doc, status: DocumentStatus.ERROR, errorMessage: message } : doc));
+    throw error;
+  } finally {
+    setReanalyzingDocumentIds(prev => prev.filter(id => id !== document.id));
+  }
+  }, [apiKey, rules, setDocuments]);
+
+  const renderDocumentsView = () => (
+    <Suspense fallback={<div className="flex items-center justify-center h-64"><div className="text-slate-500">Lade...</div></div>}>
+      <DocumentsView
+        documents={filteredDocuments}
+        setDocuments={setDocuments}
+        activeFilter={activeFilter}
+        rules={rules}
+        onRuleSuggestion={handleSetRuleSuggestion}
+        apiKey={apiKey}
+        lexofficeApiKey={lexofficeApiKey}
+        onSelectDocument={setDocumentToView}
+        storageLocations={storageLocations}
+        setStorageLocations={setStorageLocations}
+        onReanalyzeDocument={handleReanalyzeDocument}
+        reanalyzingDocumentIds={reanalyzingDocumentIds}
+      />
+    </Suspense>
+  );
+
   if (!isAuthenticated) {
-    return <LoginView onLogin={handleLogin} />;
+    return (
+      <ErrorBoundary>
+        <LoginView onLogin={handleLogin} />
+      </ErrorBoundary>
+    );
   }
 
   return (
-    <div className="flex h-screen bg-slate-50 font-sans">
+    <ErrorBoundary>
+      <div className="flex h-screen bg-slate-50 font-sans">
        {isMobileSidebarOpen && (
         <div 
             className="fixed inset-0 bg-black bg-opacity-50 z-30 md:hidden"
@@ -220,38 +520,54 @@ const App: React.FC = () => {
         />
         <main className="flex-1 overflow-x-hidden overflow-y-auto bg-slate-50 p-4 sm:p-6 lg:p-8 relative">
            {activeNotification && <DeadlineNotification deadline={activeNotification} onClose={() => setActiveNotification(null)} />}
-          {activeView === View.DOCUMENTS && (
-            <DocumentsView 
-              documents={filteredDocuments} 
-              setDocuments={setDocuments} 
-              activeFilter={activeFilter} 
-              rules={rules} 
-              onRuleSuggestion={handleSetRuleSuggestion}
-              apiKey={apiKey}
-              lexofficeApiKey={lexofficeApiKey}
-              onSelectDocument={setDocumentToView}
-            />
-          )}
-          {activeView === View.SETTINGS && <SettingsView setDocuments={setDocuments} apiKey={apiKey} setApiKey={setApiKey} lexofficeApiKey={lexofficeApiKey} setLexofficeApiKey={setLexofficeApiKey} notificationSettings={notificationSettings} setNotificationSettings={setNotificationSettings} chatSystemPrompt={chatSystemPrompt} setChatSystemPrompt={setChatSystemPrompt} DEFAULT_CHAT_PROMPT={DEFAULT_CHAT_PROMPT} />}
-          {activeView === View.ANALYSIS && <AnalysisView documents={documents} />}
-          {activeView === View.RULES && <RulesView rules={rules} setRules={setRules} />}
-          {activeView === View.DEADLINES && <DeadlinesView deadlines={deadlines} />}
-          {activeView === View.LEXOFFICE && <LexofficeView documents={documents} setDocuments={setDocuments} lexofficeApiKey={lexofficeApiKey} />}
-          {activeView === View.PROFILE && <ProfileView userProfile={userProfile} setUserProfile={setUserProfile} onLogout={handleLogout} />}
-          {activeView === View.FÖRDERUNGEN && <FörderungenView userProfile={userProfile} apiKey={apiKey} />}
+          <Suspense fallback={<div className="flex items-center justify-center h-64"><div className="text-slate-500">Lade...</div></div>}>
+            {(activeView === View.DOCUMENTS || activeView === View.BUCHHALTUNG_BELEGE) && renderDocumentsView()}
+            {activeView === View.SETTINGS && <SettingsView setDocuments={setDocuments} apiKey={apiKey} setApiKey={setApiKey} lexofficeApiKey={lexofficeApiKey} setLexofficeApiKey={setLexofficeApiKey} notificationSettings={notificationSettings} setNotificationSettings={setNotificationSettings} chatSystemPrompt={chatSystemPrompt} setChatSystemPrompt={setChatSystemPrompt} DEFAULT_CHAT_PROMPT={DEFAULT_CHAT_PROMPT} />}
+            {activeView === View.ANALYSIS && <AnalysisView documents={documents} />}
+            {activeView === View.RULES && <RulesView rules={rules} setRules={setRules} />}
+            {activeView === View.DEADLINES && <DeadlinesView deadlines={deadlines} />}
+            {(activeView === View.BUCHHALTUNG || activeView === View.BUCHHALTUNG_BUCHUNGEN) && (
+              <AccountingView
+                documents={documents}
+                setDocuments={setDocuments}
+                transactions={transactions}
+                setTransactions={setTransactions}
+                storageLocations={storageLocations}
+                onSelectDocument={setDocumentToView}
+                tasks={tasks}
+              />
+            )}
+            {activeView === View.BUCHHALTUNG_EUR && <IncomeStatementView transactions={transactions} documents={documents} />}
+            {activeView === View.BUCHHALTUNG_MELDUNGEN && <TaxFilingsView upcomingSubmissions={upcomingTaxSubmissions} transactions={transactions} />}
+            {activeView === View.LEXOFFICE && (
+              <LexofficeView
+                documents={documents}
+                setDocuments={setDocuments}
+                lexofficeApiKey={lexofficeApiKey}
+                transactions={transactions}
+                setTransactions={setTransactions}
+                storageLocations={storageLocations}
+                defaultStorageId={DEFAULT_DIGITAL_STORAGE_ID}
+              />
+            )}
+            {activeView === View.PROFILE && <ProfileView userProfile={userProfile} setUserProfile={setUserProfile} onLogout={handleLogout} />}
+            {activeView === View.FÖRDERUNGEN && <FörderungenView userProfile={userProfile} apiKey={apiKey} />}
+          </Suspense>
         </main>
       </div>
        {isChatOpen && (
-          <ChatPanel 
-            apiKey={apiKey}
-            lexofficeApiKey={lexofficeApiKey}
-            documents={documents}
-            rules={rules}
-            userProfile={userProfile}
-            onOpenDocument={handleOpenDocumentFromChat}
-            onClose={() => setIsChatOpen(false)}
-            systemPrompt={chatSystemPrompt}
-          />
+         <Suspense fallback={<div className="fixed right-0 top-0 h-full w-96 bg-slate-100 border-l border-slate-200 flex items-center justify-center"><div className="text-slate-500">Lade Chat...</div></div>}>
+           <ChatPanel 
+             apiKey={apiKey}
+             lexofficeApiKey={lexofficeApiKey}
+             documents={documents}
+             rules={rules}
+             userProfile={userProfile}
+             onOpenDocument={handleOpenDocumentFromChat}
+             onClose={() => setIsChatOpen(false)}
+             systemPrompt={chatSystemPrompt}
+           />
+         </Suspense>
         )}
        {ruleSuggestion && (
         <RuleSuggestionToast 
@@ -261,13 +577,19 @@ const App: React.FC = () => {
         />
       )}
       {documentToView && (
-        <DocumentDetailModal
-          document={documentToView}
-          onClose={() => setDocumentToView(null)}
-          onUpdate={handleDocumentUpdate}
-        />
+        <Suspense fallback={<div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"><div className="text-slate-500">Lade...</div></div>}>
+          <DocumentDetailModal
+            document={documentToView}
+            onClose={() => setDocumentToView(null)}
+            onUpdate={handleDocumentUpdate}
+            storageLocations={storageLocations}
+            onReanalyze={handleReanalyzeDocument}
+            isReanalyzing={reanalyzingDocumentIds.includes(documentToView.id)}
+          />
+        </Suspense>
       )}
     </div>
+    </ErrorBoundary>
   );
 };
 

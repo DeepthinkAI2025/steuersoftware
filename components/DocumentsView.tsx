@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { Document, DocumentStatus, InvoiceType, Rule, RuleSuggestion, LexofficeStatus, DocumentFilter } from '../types';
+import { Document, DocumentStatus, InvoiceType, Rule, RuleSuggestion, LexofficeStatus, DocumentFilter, StorageLocation, StorageLocationType } from '../types';
 import DocumentItem from './DocumentItem';
 import UploadModal from './UploadModal';
 import { PlusIcon } from './icons/PlusIcon';
@@ -11,6 +11,9 @@ import TrashIcon from './icons/TrashIcon';
 import SortAscIcon from './icons/SortAscIcon';
 import SortDescIcon from './icons/SortDescIcon';
 import FilterIcon from './icons/FilterIcon';
+import ChartBarIcon from './icons/ChartBarIcon';
+import SparklesIcon from './icons/SparklesIcon';
+import AlertTriangleIcon from './icons/AlertTriangleIcon';
 
 interface DocumentsViewProps {
   documents: Document[];
@@ -21,6 +24,10 @@ interface DocumentsViewProps {
   apiKey: string;
   lexofficeApiKey: string;
   onSelectDocument: (document: Document) => void;
+  storageLocations: StorageLocation[];
+  setStorageLocations: React.Dispatch<React.SetStateAction<StorageLocation[]>>;
+  onReanalyzeDocument: (document: Document) => Promise<void>;
+  reanalyzingDocumentIds: string[];
 }
 
 interface GroupedDocuments {
@@ -29,19 +36,40 @@ interface GroupedDocuments {
   };
 }
 
-const DocumentsView: React.FC<DocumentsViewProps> = ({ documents, setDocuments, activeFilter, rules, onRuleSuggestion, apiKey, lexofficeApiKey, onSelectDocument }) => {
+const DocumentsView: React.FC<DocumentsViewProps> = ({ documents, setDocuments, activeFilter, rules, onRuleSuggestion, apiKey, lexofficeApiKey, onSelectDocument, storageLocations, setStorageLocations, onReanalyzeDocument, reanalyzingDocumentIds }) => {
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState<{ [key: string]: boolean }>({ [new Date().getFullYear()]: true, [`${new Date().getFullYear()}-Q${Math.floor((new Date().getMonth() + 3) / 3)}`]: true});
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<Set<string>>(new Set());
   const [sendingDocId, setSendingDocId] = useState<string | null>(null);
   
-  const [sortConfig, setSortConfig] = useState<{ key: 'date' | 'name' | 'vendor' | 'amount'; direction: 'ascending' | 'descending' }>({ key: 'date', direction: 'descending' });
+  const [sortConfig, setSortConfig] = useState<{ key: 'date' | 'name' | 'vendor' | 'amount' | 'confidence'; direction: 'ascending' | 'descending' }>({ key: 'date', direction: 'descending' });
   const [statusFilter, setStatusFilter] = useState<DocumentStatus | 'all'>('all');
   const [typeFilter, setTypeFilter] = useState<InvoiceType | 'all'>('all');
+  const [storageFilter, setStorageFilter] = useState<string>('all');
+  const [confidenceFilter, setConfidenceFilter] = useState<'all' | 'high' | 'medium' | 'low'>('all');
+  const [showWarningsOnly, setShowWarningsOnly] = useState(false);
 
   const activeDocuments = useMemo(() => {
       return documents.filter(doc => doc.status !== DocumentStatus.ARCHIVED);
+  }, [documents]);
+
+  const overview = useMemo(() => {
+    const total = documents.length;
+    const warningCount = documents.filter(doc => {
+      const hasOcrWarnings = (doc.ocrMetadata?.warnings?.length || 0) > 0;
+      const hasStatusWarning = [DocumentStatus.MISSING_INVOICE, DocumentStatus.ERROR, DocumentStatus.POTENTIAL_DUPLICATE].includes(doc.status);
+      return hasOcrWarnings || hasStatusWarning;
+    }).length;
+    const missingCount = documents.filter(doc => [DocumentStatus.MISSING_INVOICE, DocumentStatus.SCREENSHOT, DocumentStatus.ERROR].includes(doc.status)).length;
+    const analysedDocs = documents.filter(doc => typeof doc.ocrMetadata?.averageConfidence === 'number');
+    const analysedCount = analysedDocs.length;
+    const averageConfidence = analysedCount > 0
+      ? Number((analysedDocs.reduce((sum, doc) => sum + (doc.ocrMetadata?.averageConfidence ?? 0), 0) / analysedCount).toFixed(1))
+      : 0;
+    const withoutStorage = documents.filter(doc => !doc.storageLocationId).length;
+
+    return { total, warningCount, missingCount, averageConfidence, withoutStorage, analysedCount };
   }, [documents]);
   
   const handleSendSingleToLexoffice = useCallback(async (docId: string) => {
@@ -76,12 +104,35 @@ const DocumentsView: React.FC<DocumentsViewProps> = ({ documents, setDocuments, 
     let filtered = activeDocuments.filter(doc => {
       const statusMatch = statusFilter === 'all' || doc.status === statusFilter;
       const typeMatch = typeFilter === 'all' || doc.invoiceType === typeFilter;
-      if (!statusMatch || !typeMatch) return false;
+      const storageMatch = storageFilter === 'all'
+        ? true
+        : storageFilter === 'none'
+          ? !doc.storageLocationId
+          : doc.storageLocationId === storageFilter;
+
+      const confidenceValue = doc.ocrMetadata?.averageConfidence ?? null;
+      const confidenceMatch = (() => {
+        if (confidenceFilter === 'all') return true;
+        if (confidenceValue === null) return false;
+        if (confidenceFilter === 'high') return confidenceValue >= 90;
+        if (confidenceFilter === 'medium') return confidenceValue >= 70 && confidenceValue < 90;
+        if (confidenceFilter === 'low') return confidenceValue < 70;
+        return true;
+      })();
+
+  const hasWarnings = (doc.ocrMetadata?.warnings?.length || 0) > 0 || [DocumentStatus.MISSING_INVOICE, DocumentStatus.ERROR, DocumentStatus.POTENTIAL_DUPLICATE].includes(doc.status);
+  const warningsMatch = !showWarningsOnly || hasWarnings;
+
+      if (!statusMatch || !typeMatch || !storageMatch || !confidenceMatch || !warningsMatch) return false;
+
       if (searchQuery.trim()) {
         const lowerCaseQuery = searchQuery.toLowerCase();
-        return doc.name.toLowerCase().includes(lowerCaseQuery) ||
-               doc.vendor?.toLowerCase().includes(lowerCaseQuery) ||
-               doc.textContent?.toLowerCase().includes(lowerCaseQuery);
+        return (
+          doc.name.toLowerCase().includes(lowerCaseQuery) ||
+          doc.vendor?.toLowerCase().includes(lowerCaseQuery) ||
+          doc.textContent?.toLowerCase().includes(lowerCaseQuery) ||
+          (doc.tags || []).some(tag => tag.toLowerCase().includes(lowerCaseQuery))
+        );
       }
       return true;
     });
@@ -92,12 +143,13 @@ const DocumentsView: React.FC<DocumentsViewProps> = ({ documents, setDocuments, 
         case 'name': comparison = a.name.localeCompare(b.name); break;
         case 'vendor': comparison = (a.vendor || '').localeCompare(b.vendor || ''); break;
         case 'amount': comparison = (a.totalAmount || 0) - (b.totalAmount || 0); break;
+        case 'confidence': comparison = (a.ocrMetadata?.averageConfidence ?? -1) - (b.ocrMetadata?.averageConfidence ?? -1); break;
         case 'date': default: comparison = new Date(a.date).getTime() - new Date(b.date).getTime(); break;
       }
       return sortConfig.direction === 'ascending' ? comparison : -comparison;
     });
     return filtered;
-  }, [activeDocuments, searchQuery, sortConfig, statusFilter, typeFilter]);
+  }, [activeDocuments, searchQuery, sortConfig, statusFilter, typeFilter, storageFilter, confidenceFilter, showWarningsOnly]);
 
   const groupedDocuments = useMemo(() => {
     return processedDocuments.reduce((acc, doc) => {
@@ -145,6 +197,38 @@ const DocumentsView: React.FC<DocumentsViewProps> = ({ documents, setDocuments, 
     }
   };
 
+  const handleUpdateStorage = useCallback((documentId: string, storageId?: string) => {
+    setDocuments(prev => prev.map(doc => doc.id === documentId ? { ...doc, storageLocationId: storageId } : doc));
+  }, [setDocuments]);
+
+  const handleCreateStorageLocation = useCallback(() => {
+    const label = window.prompt('Name der neuen Ablage?');
+    if (!label) return;
+    const trimmed = label.trim();
+    if (!trimmed) return;
+
+    setStorageLocations(prev => {
+      if (prev.some(loc => loc.label.toLowerCase() === trimmed.toLowerCase())) {
+        return prev;
+      }
+      const newLocation: StorageLocation = {
+        id: `storage-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        label: trimmed,
+        type: StorageLocationType.DIGITAL,
+      };
+      return [...prev, newLocation];
+    });
+  }, [setStorageLocations]);
+
+  const handleReanalyze = useCallback(async (document: Document) => {
+    try {
+      await onReanalyzeDocument(document);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Reanalyse fehlgeschlagen.';
+      alert(message);
+    }
+  }, [onReanalyzeDocument]);
+
   const handleSortDirectionToggle = () => setSortConfig(prev => ({ ...prev, direction: prev.direction === 'ascending' ? 'descending' : 'ascending' }));
   const handleSortKeyChange = (e: React.ChangeEvent<HTMLSelectElement>) => setSortConfig(prev => ({ ...prev, key: e.target.value as any }));
 
@@ -169,6 +253,64 @@ const DocumentsView: React.FC<DocumentsViewProps> = ({ documents, setDocuments, 
         </button>
       </div>
 
+      <div className="grid gap-4 mb-6 md:grid-cols-2 xl:grid-cols-4">
+        <div className="flex items-center gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <span className="rounded-lg bg-blue-50 p-3 text-blue-600">
+            <ChartBarIcon className="h-6 w-6" />
+          </span>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Belege gesamt</p>
+            <p className="text-2xl font-bold text-slate-900">{overview.total}</p>
+            <p className="text-xs text-slate-500">{processedDocuments.length} aktiv</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-4 rounded-xl border border-emerald-200 bg-white p-4 shadow-sm">
+          <span className="rounded-lg bg-emerald-50 p-3 text-emerald-600">
+            <SparklesIcon className="h-6 w-6" />
+          </span>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Ø OCR-Vertrauen</p>
+            <p className="text-2xl font-bold text-slate-900">
+              {overview.analysedCount > 0
+                ? `${overview.averageConfidence.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+                : '–'}
+            </p>
+            <p className="text-xs text-slate-500">
+              {overview.analysedCount > 0 ? `${overview.analysedCount} analysiert` : 'Noch keine Analysen'}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-4 rounded-xl border border-amber-200 bg-white p-4 shadow-sm">
+          <span className="rounded-lg bg-amber-50 p-3 text-amber-600">
+            <AlertTriangleIcon className="h-6 w-6" />
+          </span>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Warnungen</p>
+            <p className="text-2xl font-bold text-slate-900">{overview.warningCount}</p>
+            <p className="text-xs text-slate-500">{overview.missingCount} fehlen / fehlerhaft</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-4 rounded-xl border border-violet-200 bg-white p-4 shadow-sm">
+          <span className="rounded-lg bg-violet-50 p-3 text-violet-600">
+            <FolderIcon className="h-6 w-6" />
+          </span>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Ohne Ablage</p>
+            <p className="text-2xl font-bold text-slate-900">{overview.withoutStorage}</p>
+            <p className="text-xs text-slate-500">{storageLocations.length} Ablagen verfügbar</p>
+          </div>
+        </div>
+      </div>
+
+      {reanalyzingDocumentIds.length > 0 && (
+        <div className="mb-6 flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-medium text-blue-700">
+          <SparklesIcon className="h-4 w-4" />
+          <span>
+            {reanalyzingDocumentIds.length} Beleg{reanalyzingDocumentIds.length > 1 ? 'e' : ''} werden aktuell neu analysiert.
+          </span>
+        </div>
+      )}
+
       <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
@@ -184,32 +326,103 @@ const DocumentsView: React.FC<DocumentsViewProps> = ({ documents, setDocuments, 
               </div>
             )}
           </div>
-          <div className="flex flex-col md:flex-row items-center flex-wrap gap-4 text-sm">
-              <div className="flex items-center space-x-2 w-full md:w-auto">
-                  <label htmlFor="status-filter" className="text-slate-600 font-medium">Status:</label>
-                  <select id="status-filter" value={statusFilter} onChange={e => setStatusFilter(e.target.value as any)} className="flex-grow text-sm border-slate-300 rounded-lg bg-slate-50 focus:bg-white">
-                      <option value="all">Alle</option>
-                      {Object.values(DocumentStatus).filter(s => s !== DocumentStatus.ANALYZING && s !== DocumentStatus.ARCHIVED).map(status => <option key={status} value={status}>{status}</option>)}
-                  </select>
-              </div>
-              <div className="flex items-center space-x-2 w-full md:w-auto">
-                  <label htmlFor="type-filter" className="text-slate-600 font-medium">Typ:</label>
-                  <select id="type-filter" value={typeFilter} onChange={e => setTypeFilter(e.target.value as any)} className="flex-grow text-sm border-slate-300 rounded-lg bg-slate-50 focus:bg-white">
-                      <option value="all">Alle Typen</option>
-                      <option value={InvoiceType.INCOMING}>Ausgaben</option>
-                      <option value={InvoiceType.OUTGOING}>Einnahmen</option>
-                  </select>
-              </div>
-              <div className="flex-grow hidden md:block"></div>
-              <div className="flex items-center space-x-2 w-full md:w-auto justify-end">
-                  <label htmlFor="sort-by" className="text-slate-600 font-medium">Sortieren:</label>
-                  <select id="sort-by" value={sortConfig.key} onChange={handleSortKeyChange} className="flex-grow md:flex-grow-0 text-sm border-slate-300 rounded-lg bg-slate-50 focus:bg-white">
-                      <option value="date">Datum</option><option value="name">Name</option><option value="vendor">Verkäufer</option><option value="amount">Betrag</option>
-                  </select>
-                  <button onClick={handleSortDirectionToggle} className="p-2 hover:bg-slate-100 rounded-lg" title={`Sortierung: ${sortConfig.direction}`}>
-                      {sortConfig.direction === 'ascending' ? <SortAscIcon className="w-5 h-5 text-slate-600" /> : <SortDescIcon className="w-5 h-5 text-slate-600" />}
-                  </button>
-              </div>
+          <div className="flex flex-col xl:flex-row xl:items-center flex-wrap gap-4 text-sm">
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <label htmlFor="status-filter" className="text-slate-600 font-medium">Status:</label>
+              <select
+                id="status-filter"
+                value={statusFilter}
+                onChange={e => setStatusFilter(e.target.value as any)}
+                className="flex-1 rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 focus:bg-white sm:flex-none"
+              >
+                <option value="all">Alle</option>
+                {Object.values(DocumentStatus)
+                  .filter(s => s !== DocumentStatus.ANALYZING && s !== DocumentStatus.ARCHIVED)
+                  .map(status => (
+                    <option key={status} value={status}>{status}</option>
+                  ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <label htmlFor="type-filter" className="text-slate-600 font-medium">Typ:</label>
+              <select
+                id="type-filter"
+                value={typeFilter}
+                onChange={e => setTypeFilter(e.target.value as any)}
+                className="flex-1 rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 focus:bg-white sm:flex-none"
+              >
+                <option value="all">Alle Typen</option>
+                <option value={InvoiceType.INCOMING}>Ausgaben</option>
+                <option value={InvoiceType.OUTGOING}>Einnahmen</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <label htmlFor="storage-filter" className="text-slate-600 font-medium">Ablage:</label>
+              <select
+                id="storage-filter"
+                value={storageFilter}
+                onChange={e => setStorageFilter(e.target.value)}
+                className="flex-1 rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 focus:bg-white sm:flex-none"
+              >
+                <option value="all">Alle Orte</option>
+                <option value="none">Ohne Zuordnung</option>
+                {storageLocations.map(location => (
+                  <option key={location.id} value={location.id}>{location.label}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={handleCreateStorageLocation}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-100"
+              >
+                Neu
+              </button>
+            </div>
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <label htmlFor="confidence-filter" className="text-slate-600 font-medium">OCR:</label>
+              <select
+                id="confidence-filter"
+                value={confidenceFilter}
+                onChange={e => setConfidenceFilter(e.target.value as 'all' | 'high' | 'medium' | 'low')}
+                className="flex-1 rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 focus:bg-white sm:flex-none"
+              >
+                <option value="all">Alle Stufen</option>
+                <option value="high">≥ 90 %</option>
+                <option value="medium">70–89 %</option>
+                <option value="low">&lt; 70 %</option>
+              </select>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowWarningsOnly(prev => !prev)}
+              aria-pressed={showWarningsOnly}
+              className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 font-medium transition ${showWarningsOnly ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-slate-200 text-slate-600 hover:bg-slate-100'}`}
+            >
+              <FilterIcon className="h-4 w-4" />
+              Warnungen
+              <span className={`inline-flex h-5 min-w-[1.5rem] items-center justify-center rounded-full text-xs font-semibold ${showWarningsOnly ? 'bg-white/80 text-amber-700' : 'bg-slate-100 text-slate-600'}`}>
+                {overview.warningCount}
+              </span>
+            </button>
+            <div className="flex-grow" />
+            <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+              <label htmlFor="sort-by" className="text-slate-600 font-medium">Sortieren:</label>
+              <select
+                id="sort-by"
+                value={sortConfig.key}
+                onChange={handleSortKeyChange}
+                className="flex-1 rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 focus:bg-white sm:flex-none"
+              >
+                <option value="date">Datum</option>
+                <option value="name">Name</option>
+                <option value="vendor">Verkäufer</option>
+                <option value="amount">Betrag</option>
+                <option value="confidence">OCR Vertrauen</option>
+              </select>
+              <button onClick={handleSortDirectionToggle} className="rounded-lg p-2 hover:bg-slate-100" title={`Sortierung: ${sortConfig.direction}`}>
+                {sortConfig.direction === 'ascending' ? <SortAscIcon className="w-5 h-5 text-slate-600" /> : <SortDescIcon className="w-5 h-5 text-slate-600" />}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -238,7 +451,21 @@ const DocumentsView: React.FC<DocumentsViewProps> = ({ documents, setDocuments, 
                               <button onClick={() => toggleFolder(quarterKey)} className="w-full flex items-center p-2 pl-6 text-left text-sm font-medium text-slate-600 rounded-md hover:bg-slate-50"><ChevronDownIcon className={`w-4 h-4 mr-2 text-slate-400 transition-transform ${expandedFolders[quarterKey] ? '' : '-rotate-90'}`} />Quartal {quarter}</button>
                               {expandedFolders[quarterKey] && (
                                 <div className="pl-8 mt-1 space-y-px">
-                                    {quarterDocs.map(doc => <DocumentItem key={doc.id} document={doc} onSelect={onSelectDocument} isSelected={selectedDocumentIds.has(doc.id)} onToggleSelection={handleToggleSelection} onSendToLexoffice={handleSendSingleToLexoffice} isSendingToLexoffice={sendingDocId === doc.id} />)}
+                                    {quarterDocs.map(doc => (
+                                      <DocumentItem
+                                        key={doc.id}
+                                        document={doc}
+                                        onSelect={onSelectDocument}
+                                        isSelected={selectedDocumentIds.has(doc.id)}
+                                        onToggleSelection={handleToggleSelection}
+                                        onSendToLexoffice={handleSendSingleToLexoffice}
+                                        isSendingToLexoffice={sendingDocId === doc.id}
+                                        storageLocations={storageLocations}
+                                        onUpdateStorage={handleUpdateStorage}
+                                        onReanalyze={handleReanalyze}
+                                        isReanalyzing={reanalyzingDocumentIds.includes(doc.id)}
+                                      />
+                                    ))}
                                 </div>
                               )}
                             </div>

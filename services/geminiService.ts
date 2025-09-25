@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { GeminiAnalysisResult, Document, DocumentStatus, InvoiceType, Rule, ChatMessage, UserProfile, FundingOpportunity } from '../types';
+import { GeminiAnalysisResult, Document, DocumentStatus, InvoiceType, Rule, ChatMessage, UserProfile, FundingOpportunity, DocumentOcrMetadata, OcrFieldConfidence, DEFAULT_DIGITAL_STORAGE_ID } from '../types';
 
 const handleGeminiError = (error: unknown): string => {
     console.error("Gemini API Error:", error);
@@ -30,6 +30,8 @@ const fileToGenerativePart = async (file: File) => {
         inlineData: { data: await base64EncodedDataPromise, mimeType: file.type },
     };
 };
+
+const GEMINI_MODEL = 'gemini-2.5-pro';
 
 export const createSuggestedFileName = (result: GeminiAnalysisResult, originalExtension: string): string => {
     const { vendor, totalAmount, documentDate } = result;
@@ -66,7 +68,7 @@ export const analyzeDocument = async (file: File, rules: Rule[], apiKey: string)
         console.warn("API key not found. Using a mock response for document analysis.");
         await new Promise(resolve => setTimeout(resolve, 1500));
         const randomAmount = Math.random() * 200 + 10;
-        let mockResult: GeminiAnalysisResult = {
+        const mockResult: GeminiAnalysisResult = {
             isInvoice: !file.name.toLowerCase().includes('bestätigung'),
             isOrderConfirmation: file.name.toLowerCase().includes('bestätigung'),
             isEmailBody: file.name.toLowerCase().includes('email'),
@@ -78,18 +80,26 @@ export const analyzeDocument = async (file: File, rules: Rule[], apiKey: string)
             invoiceNumber: `RE-${Math.floor(Math.random() * 100000)}`,
             invoiceType: InvoiceType.INCOMING,
             taxCategory: 'Sonstiges',
+            averageConfidence: Math.round(80 + Math.random() * 15),
+            pageCount: 1,
+            fieldConfidences: [],
+            warnings: [],
+            suggestedStorageLocationId: DEFAULT_DIGITAL_STORAGE_ID,
         };
-        return applyRules(mockResult, rules);
+        const ruledResult = applyRules(mockResult, rules);
+        const finalMockResult = ensureExtendedAnalysisData(ruledResult);
+        if (!finalMockResult.invoiceType) finalMockResult.invoiceType = InvoiceType.INCOMING;
+        if (!finalMockResult.taxCategory || finalMockResult.taxCategory === '') finalMockResult.taxCategory = 'Sonstiges';
+        return finalMockResult;
     }
 
     const ai = new GoogleGenAI({ apiKey });
-    const model = 'gemini-2.5-flash';
 
     try {
         const imagePart = await fileToGenerativePart(file);
 
         const response: GenerateContentResponse = await ai.models.generateContent({
-            model: model,
+            model: GEMINI_MODEL,
             contents: {
                 parts: [
                     imagePart,
@@ -120,8 +130,9 @@ export const analyzeDocument = async (file: File, rules: Rule[], apiKey: string)
         
         const jsonStr = response.text.trim();
         const rawResult: GeminiAnalysisResult = JSON.parse(jsonStr);
-        
-        const finalResult = applyRules(rawResult, rules);
+
+        const ruledResult = applyRules(rawResult, rules);
+        const finalResult = ensureExtendedAnalysisData(ruledResult);
 
         if (!finalResult.invoiceType) finalResult.invoiceType = InvoiceType.INCOMING;
         if (!finalResult.taxCategory || finalResult.taxCategory === '') finalResult.taxCategory = 'Sonstiges';
@@ -130,6 +141,148 @@ export const analyzeDocument = async (file: File, rules: Rule[], apiKey: string)
     } catch (error) {
         throw new Error(handleGeminiError(error));
     }
+};
+
+const clampConfidence = (value: number | undefined): number => {
+    if (typeof value !== 'number' || Number.isNaN(value)) return 65;
+    return Math.max(10, Math.min(100, Math.round(value)));
+};
+
+const describeConfidence = (value: number): string => {
+    if (value >= 90) return 'Sehr hoch';
+    if (value >= 75) return 'Stark';
+    if (value >= 60) return 'Mittel';
+    return 'Gering';
+};
+
+const buildDefaultFieldConfidences = (result: GeminiAnalysisResult): OcrFieldConfidence[] => {
+    return [
+        {
+            field: 'vendor',
+            value: result.vendor || '',
+            confidence: clampConfidence(result.vendor ? 92 : 65),
+        },
+        {
+            field: 'invoiceNumber',
+            value: result.invoiceNumber || '',
+            confidence: clampConfidence(result.invoiceNumber ? 88 : 60),
+        },
+        {
+            field: 'documentDate',
+            value: result.documentDate || '',
+            confidence: clampConfidence(result.documentDate ? 87 : 60),
+        },
+        {
+            field: 'totalAmount',
+            value: typeof result.totalAmount === 'number' ? result.totalAmount.toFixed(2) : '',
+            confidence: clampConfidence(result.totalAmount ? 90 : 58),
+        },
+        {
+            field: 'vatAmount',
+            value: typeof result.vatAmount === 'number' ? result.vatAmount.toFixed(2) : '',
+            confidence: clampConfidence(result.vatAmount ? 82 : 55),
+        },
+        {
+            field: 'invoiceType',
+            value: result.invoiceType,
+            confidence: clampConfidence(86),
+        },
+        {
+            field: 'taxCategory',
+            value: result.taxCategory || 'Sonstiges',
+            confidence: clampConfidence(result.taxCategory && result.taxCategory !== 'Sonstiges' ? 78 : 65),
+        },
+    ].map(field => ({
+        ...field,
+        confidenceDescription: describeConfidence(field.confidence),
+    }));
+};
+
+const deriveDefaultWarnings = (result: GeminiAnalysisResult, averageConfidence: number): string[] => {
+    const warnings = result.warnings ? [...result.warnings] : [];
+    if (result.isOrderConfirmation && !result.isInvoice && !warnings.some(w => w.includes('Bestell'))) {
+        warnings.push('Analyse deutet auf eine Bestellbestätigung ohne Rechnung hin.');
+    }
+    if (result.isEmailBody && !result.isInvoice && !warnings.some(w => w.includes('E-Mail'))) {
+        warnings.push('Dokument wirkt wie eine E-Mail – bitte prüfen, ob ein offizieller Beleg vorliegt.');
+    }
+    if (!result.invoiceNumber && !warnings.some(w => w.includes('Rechnungsnummer'))) {
+        warnings.push('Keine eindeutige Rechnungsnummer erkannt.');
+    }
+    if (!result.totalAmount || result.totalAmount <= 0) {
+        warnings.push('Kein gültiger Bruttobetrag erkannt.');
+    }
+    if (averageConfidence < 75) {
+        warnings.push('OCR-Qualität liegt unter 75 %. Felder bitte manuell prüfen.');
+    }
+    return warnings;
+};
+
+const ensureExtendedAnalysisData = (result: GeminiAnalysisResult): GeminiAnalysisResult => {
+    const baseFields = result.fieldConfidences && result.fieldConfidences.length > 0
+        ? result.fieldConfidences.map(field => ({
+            ...field,
+            confidence: clampConfidence(field.confidence),
+            confidenceDescription: field.confidenceDescription || describeConfidence(clampConfidence(field.confidence)),
+        }))
+        : buildDefaultFieldConfidences(result);
+
+    const synchronizedFields = baseFields.map(field => {
+        switch (field.field) {
+            case 'vendor':
+                return { ...field, value: result.vendor || '' };
+            case 'invoiceNumber':
+                return { ...field, value: result.invoiceNumber || '' };
+            case 'documentDate':
+                return { ...field, value: result.documentDate || '' };
+            case 'totalAmount':
+                return {
+                    ...field,
+                    value: typeof result.totalAmount === 'number' ? result.totalAmount.toFixed(2) : field.value,
+                };
+            case 'vatAmount':
+                return {
+                    ...field,
+                    value: typeof result.vatAmount === 'number' ? result.vatAmount.toFixed(2) : field.value,
+                };
+            case 'invoiceType':
+                return { ...field, value: result.invoiceType };
+            case 'taxCategory':
+                return { ...field, value: result.taxCategory || 'Sonstiges' };
+            default:
+                return field;
+        }
+    });
+
+    const avg = synchronizedFields.length > 0
+        ? Number((synchronizedFields.reduce((sum, field) => sum + field.confidence, 0) / synchronizedFields.length).toFixed(2))
+        : clampConfidence(result.averageConfidence);
+
+    const averageConfidence = typeof result.averageConfidence === 'number'
+        ? Number(result.averageConfidence.toFixed(2))
+        : avg;
+
+    const warnings = deriveDefaultWarnings(result, averageConfidence);
+
+    return {
+        ...result,
+        fieldConfidences: synchronizedFields,
+        averageConfidence,
+        warnings,
+        suggestedStorageLocationId: result.suggestedStorageLocationId || DEFAULT_DIGITAL_STORAGE_ID,
+    };
+};
+
+export const buildOcrMetadataFromAnalysis = (analysis: GeminiAnalysisResult): DocumentOcrMetadata => {
+    const enriched = ensureExtendedAnalysisData(analysis);
+    return {
+        averageConfidence: enriched.averageConfidence ?? 85,
+        analysedAt: new Date(),
+        engineVersion: GEMINI_MODEL,
+        pageCount: enriched.pageCount,
+        fields: enriched.fieldConfidences ?? [],
+        warnings: enriched.warnings,
+    };
 };
 
 export const getDocumentStatusFromAnalysis = (analysis: GeminiAnalysisResult, existingDocuments: Document[] = []): DocumentStatus => {
@@ -218,11 +371,9 @@ export const getChatResponse = async (apiKey: string, history: ChatMessage[], do
     ---
     `;
 
-    const model = 'gemini-2.5-flash';
-    
     try {
         const chat = ai.chats.create({
-            model,
+            model: GEMINI_MODEL,
             config: { systemInstruction },
             history: history.map(msg => ({
                 role: msg.role,
@@ -249,8 +400,6 @@ export const findFundingOpportunities = async (apiKey: string, userProfile: User
     }
 
     const ai = new GoogleGenAI({ apiKey });
-    const model = 'gemini-2.5-flash';
-    
     const prompt = `
         Du bist ein Experte für deutsche Fördermittel für Unternehmen.
         Basierend auf dem folgenden Unternehmensprofil, führe eine Websuche durch und finde relevante, aktuelle Förderprogramme, Zuschüsse und Kredite in Deutschland.
@@ -276,8 +425,8 @@ export const findFundingOpportunities = async (apiKey: string, userProfile: User
     `;
 
     try {
-        const response = await ai.models.generateContent({
-           model: model,
+          const response = await ai.models.generateContent({
+              model: GEMINI_MODEL,
            contents: prompt,
            config: {
              tools: [{googleSearch: {}}],
