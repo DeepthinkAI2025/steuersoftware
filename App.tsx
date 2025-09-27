@@ -8,6 +8,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { Document, DocumentStatus, View, Rule, InvoiceType, RuleSuggestion, NotificationSettings, Deadline, UserProfile, DocumentFilter, AccountingTransaction, TransactionStatus, TransactionSource, TaskItem, TaskStatus, TaskPriority, StorageLocation, StorageLocationType, DEFAULT_DIGITAL_STORAGE_ID } from './types';
 import { getDeadlines } from './services/deadlineService';
 import { analyzeDocument, getDocumentStatusFromAnalysis, buildOcrMetadataFromAnalysis } from './services/geminiService';
+import { importFromLexoffice, upsertTransactionsFromLexoffice, buildDocumentFromLexoffice, setLexofficeLiveMode, getLexofficeLiveMode } from './services/lexofficeService';
 
 // Lazy load heavy components
 const DocumentsView = lazy(() => import('./components/DocumentsView'));
@@ -36,6 +37,8 @@ const initialRules: Rule[] = [
 
 export const DEFAULT_CHAT_PROMPT = `Du bist ein hochintelligenter KI-Steuerassistent, integriert in eine Belegverwaltungssoftware. Deine Aufgabe ist es, die Fragen des Benutzers präzise und kontextbezogen zu beantworten. Nutze dazu ausschließlich die folgenden, dir zur Verfügung gestellten Echtzeit-Daten aus der Anwendung.
 
+Du bist befähigt, Lexoffice-Vorgänge eigenständig auszuführen. Wenn der Benutzer dich bittet, Belege oder Transaktionen aus Lexoffice zu importieren, darfst du das Werkzeug \`import_from_lexoffice\` einsetzen, anstatt den Benutzer auf eine manuelle Lösung zu verweisen.
+
 **Formatierungsregeln für Antworten:**
 - Antworte immer in natürlicher, hilfreicher Sprache.
 - Formatiere deine Antworten klar und übersichtlich, nutze Markdown für Listen und **Fettdruck**.
@@ -50,10 +53,13 @@ Ich habe einen Beleg von Bauhaus gefunden:
 %%DOC_BUTTON(d-12345)%%
 
 **Werkzeuge:**
-Du hast Zugriff auf das folgende Werkzeug:
+Du hast Zugriff auf die folgenden Werkzeuge:
 - \`send_to_lexoffice\`: Sendet alle aktuell sichtbaren Belege an Lexoffice. Es hat keine Parameter.
-Wenn der Benutzer dich bittet, eine Aktion auszuführen (z.B. "sende an lexoffice"), antworte AUSSCHLIESSLICH mit einem JSON-Objekt im folgenden Format:
+- \`import_from_lexoffice\`: Importiert Transaktionen und Dokumente aus Lexoffice für einen bestimmten Zeitraum. Parameter: {"dateRange": {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}, "includeDocuments": true/false}
+Wenn der Benutzer dich bittet, eine Aktion auszuführen (z.B. "importiere aus lexoffice" oder "sende an lexoffice"), antworte AUSSCHLIESSLICH mit einem JSON-Objekt im folgenden Format:
 {"tool_use": {"name": "send_to_lexoffice", "parameters": {}}}
+oder
+{"tool_use": {"name": "import_from_lexoffice", "parameters": {"dateRange": {"start": "2023-01-01", "end": "2023-12-31"}, "includeDocuments": true}}}
 
 **Recherche & Wissensbasis (Wie ein Fuchs):**
 - Der Benutzer kann dir URLs im System-Prompt hinterlegen. Nutze diese als deine primäre Wissensbasis für Recherchen.
@@ -160,6 +166,14 @@ const App: React.FC = () => {
   // API Keys, Chat State, and Profile
   const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem('geminiApiKey') || '');
   const [lexofficeApiKey, setLexofficeApiKey] = useState<string>(() => localStorage.getItem('lexofficeApiKey') || '');
+  const [lexofficeLiveEnabled, setLexofficeLiveEnabled] = useState<boolean>(() => {
+    if (!isBrowser) return getLexofficeLiveMode();
+    const stored = localStorage.getItem('lexofficeLiveMode');
+    if (stored !== null) {
+      return stored === 'true';
+    }
+    return getLexofficeLiveMode();
+  });
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
   const [documentToView, setDocumentToView] = useState<Document | null>(null);
   const [reanalyzingDocumentIds, setReanalyzingDocumentIds] = useState<string[]>([]);
@@ -168,6 +182,13 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('userProfile');
     return saved ? JSON.parse(saved) : { name: 'Admin User', taxId: '', vatId: '', taxNumber: '', companyForm: '', profilePicture: undefined };
   });
+
+  useEffect(() => {
+    const storedPrompt = localStorage.getItem('chatSystemPrompt');
+    if (storedPrompt && storedPrompt.includes('das folgende Werkzeug')) {
+      setChatSystemPrompt(DEFAULT_CHAT_PROMPT);
+    }
+  }, []);
 
   // Deadlines & Notifications
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>(() => {
@@ -198,6 +219,12 @@ const App: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('lexofficeApiKey', lexofficeApiKey);
   }, [lexofficeApiKey]);
+
+  useEffect(() => {
+    setLexofficeLiveMode(lexofficeLiveEnabled);
+    if (!isBrowser) return;
+    localStorage.setItem('lexofficeLiveMode', String(lexofficeLiveEnabled));
+  }, [lexofficeLiveEnabled]);
   
   useEffect(() => {
     localStorage.setItem('notificationSettings', JSON.stringify(notificationSettings));
@@ -383,6 +410,49 @@ const App: React.FC = () => {
     setRuleSuggestion(null);
   };
 
+  const handleImportFromLexoffice = async (dateRange: { start: Date; end: Date }, includeDocuments: boolean) => {
+    const importResult = await importFromLexoffice({
+      apiKey: lexofficeApiKey || undefined,
+      dateRange,
+      includeDocuments,
+    });
+
+    const candidateDocuments = (importResult.documents || []).map(payload => buildDocumentFromLexoffice(payload, DEFAULT_DIGITAL_STORAGE_ID));
+
+    const invoiceMap = new Map<string, string>();
+    documents.forEach(doc => {
+      if (doc.invoiceNumber) {
+        invoiceMap.set(doc.invoiceNumber, doc.id);
+      }
+    });
+    candidateDocuments.forEach(doc => {
+      if (doc.invoiceNumber) {
+        invoiceMap.set(doc.invoiceNumber, doc.id);
+      }
+    });
+
+    const { updatedTransactions } = upsertTransactionsFromLexoffice({
+      incoming: importResult.transactions,
+      existingTransactions: transactions,
+      linkedByInvoice: invoiceMap,
+    });
+
+    setTransactions(updatedTransactions);
+
+    const existingIds = new Set(documents.map(doc => doc.id));
+    const existingInvoiceNumbers = new Set(documents.map(doc => doc.invoiceNumber).filter(Boolean) as string[]);
+    const additions = candidateDocuments.filter(doc => {
+      if (existingIds.has(doc.id)) return false;
+      const invoiceNumber = doc.invoiceNumber;
+      if (invoiceNumber && existingInvoiceNumbers.has(invoiceNumber)) return false;
+      return true;
+    });
+
+    if (additions.length > 0) {
+      setDocuments(prev => [...prev, ...additions]);
+    }
+  };
+
   const handleOpenDocumentFromChat = (docId: string) => {
     const docToOpen = documents.find(doc => doc.id === docId);
     if (docToOpen) {
@@ -522,7 +592,22 @@ const App: React.FC = () => {
            {activeNotification && <DeadlineNotification deadline={activeNotification} onClose={() => setActiveNotification(null)} />}
           <Suspense fallback={<div className="flex items-center justify-center h-64"><div className="text-slate-500">Lade...</div></div>}>
             {(activeView === View.DOCUMENTS || activeView === View.BUCHHALTUNG_BELEGE) && renderDocumentsView()}
-            {activeView === View.SETTINGS && <SettingsView setDocuments={setDocuments} apiKey={apiKey} setApiKey={setApiKey} lexofficeApiKey={lexofficeApiKey} setLexofficeApiKey={setLexofficeApiKey} notificationSettings={notificationSettings} setNotificationSettings={setNotificationSettings} chatSystemPrompt={chatSystemPrompt} setChatSystemPrompt={setChatSystemPrompt} DEFAULT_CHAT_PROMPT={DEFAULT_CHAT_PROMPT} />}
+            {activeView === View.SETTINGS && (
+              <SettingsView
+                setDocuments={setDocuments}
+                apiKey={apiKey}
+                setApiKey={setApiKey}
+                lexofficeApiKey={lexofficeApiKey}
+                setLexofficeApiKey={setLexofficeApiKey}
+                lexofficeLiveEnabled={lexofficeLiveEnabled}
+                setLexofficeLiveEnabled={setLexofficeLiveEnabled}
+                notificationSettings={notificationSettings}
+                setNotificationSettings={setNotificationSettings}
+                chatSystemPrompt={chatSystemPrompt}
+                setChatSystemPrompt={setChatSystemPrompt}
+                DEFAULT_CHAT_PROMPT={DEFAULT_CHAT_PROMPT}
+              />
+            )}
             {activeView === View.ANALYSIS && <AnalysisView documents={documents} />}
             {activeView === View.RULES && <RulesView rules={rules} setRules={setRules} />}
             {activeView === View.DEADLINES && <DeadlinesView deadlines={deadlines} />}
@@ -566,6 +651,7 @@ const App: React.FC = () => {
              onOpenDocument={handleOpenDocumentFromChat}
              onClose={() => setIsChatOpen(false)}
              systemPrompt={chatSystemPrompt}
+             onImportFromLexoffice={handleImportFromLexoffice}
            />
          </Suspense>
         )}

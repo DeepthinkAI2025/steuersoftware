@@ -12,6 +12,8 @@ interface SettingsViewProps {
   setApiKey: (key: string) => void;
   lexofficeApiKey: string;
   setLexofficeApiKey: (key: string) => void;
+  lexofficeLiveEnabled: boolean;
+  setLexofficeLiveEnabled: (enabled: boolean) => void;
   notificationSettings: NotificationSettings;
   setNotificationSettings: React.Dispatch<React.SetStateAction<NotificationSettings>>;
   chatSystemPrompt: string;
@@ -28,12 +30,14 @@ const SettingsCard: React.FC<{ title: string; description: string; children: Rea
 );
 
 
-const SettingsView: React.FC<SettingsViewProps> = ({ setDocuments, apiKey, setApiKey, lexofficeApiKey, setLexofficeApiKey, notificationSettings, setNotificationSettings, chatSystemPrompt, setChatSystemPrompt, DEFAULT_CHAT_PROMPT }) => {
+const SettingsView: React.FC<SettingsViewProps> = ({ setDocuments, apiKey, setApiKey, lexofficeApiKey, setLexofficeApiKey, lexofficeLiveEnabled, setLexofficeLiveEnabled, notificationSettings, setNotificationSettings, chatSystemPrompt, setChatSystemPrompt, DEFAULT_CHAT_PROMPT }) => {
   const [emails, setEmails] = useState<string[]>(['anna.muster@mail.com', 'privat@email.de']);
   const [newEmail, setNewEmail] = useState('');
   const [scanPeriod, setScanPeriod] = useState<string>('30');
   const [isWhatsAppConnected, setIsWhatsAppConnected] = useState(true);
   const [isScanning, setIsScanning] = useState(false);
+  const [showGeminiKey, setShowGeminiKey] = useState(false);
+  const [showLexofficeKey, setShowLexofficeKey] = useState(false);
 
   const handleAddEmail = (e: React.FormEvent) => {
     e.preventDefault();
@@ -92,25 +96,60 @@ const SettingsView: React.FC<SettingsViewProps> = ({ setDocuments, apiKey, setAp
         <div className="space-y-4">
             <div>
                 <label htmlFor="api-key" className="block text-sm font-medium text-slate-700 mb-1">Gemini API Schlüssel</label>
-                <input
-                  type="password"
-                  id="api-key"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="Geben Sie Ihren API-Schlüssel hier ein"
-                  className="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                />
+                <div className="relative">
+                  <input
+                    type={showGeminiKey ? 'text' : 'password'}
+                    id="api-key"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder="Geben Sie Ihren API-Schlüssel hier ein"
+                    className="w-full p-2 pr-24 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowGeminiKey(prev => !prev)}
+                    className="absolute inset-y-1 right-1 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 hover:text-blue-600"
+                  >
+                    {showGeminiKey ? 'Verbergen' : 'Anzeigen'}
+                  </button>
+                </div>
             </div>
-             <div>
+            <div>
                 <label htmlFor="lexoffice-api-key" className="block text-sm font-medium text-slate-700 mb-1">Lexoffice API Schlüssel</label>
+                <div className="relative">
+                  <input
+                    type={showLexofficeKey ? 'text' : 'password'}
+                    id="lexoffice-api-key"
+                    value={lexofficeApiKey}
+                    onChange={(e) => setLexofficeApiKey(e.target.value)}
+                    placeholder="Geben Sie Ihren Lexoffice API-Schlüssel ein"
+                    className="w-full p-2 pr-24 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowLexofficeKey(prev => !prev)}
+                    className="absolute inset-y-1 right-1 rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 hover:text-blue-600"
+                  >
+                    {showLexofficeKey ? 'Verbergen' : 'Anzeigen'}
+                  </button>
+                </div>
+            </div>
+            <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="pr-4">
+                <p className="text-sm font-medium text-slate-700">Direkte Lexoffice-API verwenden</p>
+                <p className="text-xs text-slate-500">Aktiviert echte Importe/Exporte über Lexoffice. Erfordert einen gültigen API-Schlüssel.</p>
+              </div>
+              <label className="inline-flex items-center cursor-pointer">
                 <input
-                  type="password"
-                  id="lexoffice-api-key"
-                  value={lexofficeApiKey}
-                  onChange={(e) => setLexofficeApiKey(e.target.value)}
-                  placeholder="Geben Sie Ihren Lexoffice API-Schlüssel ein"
-                  className="w-full p-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  type="checkbox"
+                  checked={lexofficeLiveEnabled}
+                  onChange={(event) => setLexofficeLiveEnabled(event.target.checked)}
+                  className="sr-only peer"
                 />
+                <div className="relative w-12 h-6 bg-slate-300 rounded-full peer-focus:ring-4 peer-focus:ring-blue-200 peer-checked:bg-blue-600 transition">
+                  <span className="absolute top-0.5 left-0.5 h-5 w-5 bg-white rounded-full shadow transition-transform peer-checked:translate-x-6"></span>
+                </div>
+              </label>
             </div>
         </div>
         <p className="text-xs text-slate-400 mt-4 text-center">Ihre API-Schlüssel werden sicher in Ihrem Browser gespeichert.</p>

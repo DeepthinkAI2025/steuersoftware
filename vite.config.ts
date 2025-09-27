@@ -62,7 +62,20 @@ export default defineConfig(({ mode }) => {
           '@': path.resolve(__dirname, '.'),
         }
       },
+      server: {
+        host: '0.0.0.0',
+        port: Number(env.VITE_DEV_PORT ?? 5173),
+        strictPort: true,
+      },
+      preview: {
+        host: '0.0.0.0',
+        port: Number(env.VITE_PREVIEW_PORT ?? 4173),
+        strictPort: true,
+      },
       build: {
+        modulePreload: {
+          polyfill: false,
+        },
         rollupOptions: {
           output: {
             manualChunks: (id) => {

@@ -6,8 +6,85 @@ const META_ENV = ((import.meta as ImportMeta & { env?: Record<string, string | u
 
 const ENABLE_LIVE_LEXOFFICE = (META_ENV.VITE_LEXOFFICE_ENABLE_REAL_API ?? 'false') === 'true';
 const LEXOFFICE_API_BASE = (META_ENV.VITE_LEXOFFICE_API_BASE ?? 'https://api.lexoffice.io').replace(/\/$/, '');
+const LEXOFFICE_PROXY_BASE = (META_ENV.VITE_LEXOFFICE_PROXY_BASE ?? '').replace(/\/$/, '');
+const LEXOFFICE_PROXY_PORT = META_ENV.VITE_LEXOFFICE_PROXY_PORT ?? '5174';
+
+const resolveProxyBase = () => {
+  if (LEXOFFICE_PROXY_BASE) {
+    return LEXOFFICE_PROXY_BASE;
+  }
+
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  const { protocol, hostname, port } = window.location;
+
+  if (hostname.endsWith('.app.github.dev')) {
+    const derivedHost = hostname.replace(/-(\d+)\.app\.github\.dev$/i, (_match, currentPort) => {
+      if (!currentPort) return `-${LEXOFFICE_PROXY_PORT}.app.github.dev`;
+      if (currentPort === LEXOFFICE_PROXY_PORT) return `-${currentPort}.app.github.dev`;
+      return `-${LEXOFFICE_PROXY_PORT}.app.github.dev`;
+    });
+    return `${protocol}//${derivedHost}`;
+  }
+
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    return `${protocol}//${hostname}:${LEXOFFICE_PROXY_PORT}`;
+  }
+
+  return `${protocol}//${hostname}:${LEXOFFICE_PROXY_PORT}`;
+};
+
+let liveModeOverride: boolean | null = null;
+
+export const setLexofficeLiveMode = (enabled: boolean | null) => {
+  liveModeOverride = typeof enabled === 'boolean' ? enabled : null;
+};
+
+export const getLexofficeLiveMode = () => {
+  if (liveModeOverride !== null) {
+    return liveModeOverride;
+  }
+  return ENABLE_LIVE_LEXOFFICE;
+};
 
 const toIsoDate = (date: Date) => date.toISOString().split('T')[0];
+
+const mapProxyTransaction = (entry: any): LexofficeTransactionPayload => {
+  const invoiceType = entry?.invoiceType === 'outgoing' ? InvoiceType.OUTGOING : InvoiceType.INCOMING;
+  return {
+    id: entry?.id ?? `lex-${Math.random().toString(36).slice(2, 12)}`,
+    description: entry?.description ?? 'Lexoffice Buchung',
+    amount: typeof entry?.amount === 'number' ? entry.amount : Number(entry?.amount) || 0,
+    date: entry?.date ?? new Date().toISOString(),
+    invoiceType,
+    taxCategory: entry?.taxCategory ?? 'Unkategorisiert',
+    invoiceNumber: entry?.invoiceNumber ?? undefined,
+    hasDocument: Boolean(entry?.hasDocument),
+    voucherId: entry?.voucherId ?? undefined,
+    fileIds: Array.isArray(entry?.fileIds) ? entry.fileIds : undefined,
+    vendor: entry?.vendor ?? undefined,
+  };
+};
+
+const mapProxyDocument = (entry: any): LexofficeDocumentPayload => {
+  const invoiceType = entry?.invoiceType === 'outgoing' ? InvoiceType.OUTGOING : InvoiceType.INCOMING;
+  return {
+    id: entry?.id ?? `lex-doc-${Math.random().toString(36).slice(2, 12)}`,
+    transactionExternalId: entry?.transactionExternalId ?? undefined,
+    filename: entry?.filename ?? 'Beleg.pdf',
+    url: entry?.url ?? entry?.downloadUrl ?? '',
+    issuedDate: entry?.issuedDate ?? new Date().toISOString(),
+    vendor: entry?.vendor ?? 'Unbekannt',
+    totalAmount: typeof entry?.totalAmount === 'number' ? entry.totalAmount : Number(entry?.totalAmount) || 0,
+    vatAmount: typeof entry?.vatAmount === 'number' ? entry.vatAmount : undefined,
+    taxCategory: entry?.taxCategory ?? undefined,
+    invoiceType,
+    invoiceNumber: entry?.invoiceNumber ?? undefined,
+    file: entry?.file ?? undefined,
+  };
+};
 
 export interface LexofficeTransactionPayload {
   id: string;
@@ -398,7 +475,11 @@ const getEffectiveApiKey = (explicitKey?: string) => {
   return candidate || '';
 };
 
-const shouldUseLiveApi = (explicitKey?: string) => ENABLE_LIVE_LEXOFFICE && !!getEffectiveApiKey(explicitKey);
+const shouldUseLiveApi = (explicitKey?: string) => {
+  const override = liveModeOverride;
+  const enabledFlag = override !== null ? override : ENABLE_LIVE_LEXOFFICE;
+  return enabledFlag && !!getEffectiveApiKey(explicitKey);
+};
 
 const buildHeaders = (apiKey: string, base?: HeadersInit) => {
   const headers = new Headers(base ?? {});
@@ -827,38 +908,97 @@ const simulateSendToLexoffice = async ({ documents, onProgress }: SendDocumentsT
   };
 };
 
+const buildSimulationResponse = async (options: SimulateLexofficeImportOptions, reason?: unknown): Promise<LexofficeImportResponse> => {
+  if (reason) {
+    console.warn('Lexoffice Live Import fehlgeschlagen – wechsle zur Simulation.', reason);
+  }
+  const simulated = await simulateLexofficeImport(options);
+  return {
+    ...simulated,
+    mode: 'simulation',
+  };
+};
+
 export const importFromLexoffice = async ({ apiKey, dateRange, includeDocuments = true }: ImportFromLexofficeOptions = {}) => {
-  if (!shouldUseLiveApi(apiKey)) {
-    const simulated = await simulateLexofficeImport({ dateRange, includeDocuments });
-    return {
-      ...simulated,
-      mode: 'simulation' as const,
-    } satisfies LexofficeImportResponse;
+  const simulationOptions: SimulateLexofficeImportOptions = { dateRange, includeDocuments };
+  const liveRequested = liveModeOverride !== null ? liveModeOverride : ENABLE_LIVE_LEXOFFICE;
+  const useLive = shouldUseLiveApi(apiKey);
+
+  if (!useLive) {
+    if (liveRequested) {
+      throw new Error('Kein Lexoffice API-Schlüssel vorhanden oder ungültig.');
+    }
+    return buildSimulationResponse(simulationOptions);
   }
 
   const effectiveKey = getEffectiveApiKey(apiKey);
   if (!effectiveKey) {
-    throw new Error('Kein Lexoffice API-Schlüssel vorhanden.');
+    if (liveRequested) {
+      throw new Error('Kein Lexoffice API-Schlüssel vorhanden.');
+    }
+    return buildSimulationResponse(simulationOptions, 'Kein API-Schlüssel – Simulation wird genutzt.');
   }
 
-  const transactions = await fetchTransactionsFromLexofficeLive(effectiveKey, dateRange);
-  const documents = includeDocuments
-    ? await fetchDocumentsFromLexofficeLive(effectiveKey, transactions, dateRange)
-    : undefined;
+  try {
+    const proxyBase = resolveProxyBase();
+    const query = new URLSearchParams();
+    if (dateRange) {
+      query.set('start', toIsoDate(dateRange.start));
+      query.set('end', toIsoDate(dateRange.end));
+    }
+    query.set('includeDocuments', includeDocuments ? 'true' : 'false');
 
-  const summary: LexofficeImportResult['summary'] = {
-    imported: transactions.length,
-    updated: 0,
-    skipped: 0,
-    missingReceipts: transactions.filter(tx => !tx.hasDocument).length,
-  };
+    const proxyUrl = `${proxyBase}/api/lexoffice/import?${query.toString()}`;
+    const headers: HeadersInit = { Accept: 'application/json' };
+    if ((META_ENV.VITE_LEXOFFICE_PROXY_SKIP_KEY ?? 'false') !== 'true') {
+      headers['x-lexoffice-api-key'] = effectiveKey;
+    }
 
-  return {
-    transactions,
-    documents,
-    summary,
-    mode: 'live' as const,
-  } satisfies LexofficeImportResponse;
+    const response = await fetch(proxyUrl, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || `Lexoffice Proxy Fehler (${response.status})`);
+    }
+
+    const payload = await response.json();
+
+    const transactions = Array.isArray(payload?.transactions)
+      ? payload.transactions.map(mapProxyTransaction)
+      : [];
+
+    const documents = includeDocuments && Array.isArray(payload?.documents)
+      ? payload.documents.map(mapProxyDocument)
+      : undefined;
+
+    const summary: LexofficeImportResult['summary'] = payload?.summary ?? {
+      imported: transactions.length,
+      updated: 0,
+      skipped: 0,
+      missingReceipts: transactions.filter(tx => !tx.hasDocument).length,
+    };
+
+    return {
+      transactions,
+      documents,
+      summary,
+      mode: payload?.mode === 'simulation' ? 'simulation' : 'live',
+    } satisfies LexofficeImportResponse;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (liveRequested) {
+      if (message.includes('Failed to fetch')) {
+        throw new Error('Lexoffice Proxy nicht erreichbar. Bitte starten Sie den Proxy-Server (npm run server) oder prüfen Sie die Proxy-URL.');
+      }
+      throw error instanceof Error ? error : new Error(message);
+    }
+    return buildSimulationResponse(simulationOptions, error);
+  }
+
 };
 
 export const sendDocumentsToLexoffice = async ({ documents, apiKey, onProgress }: SendDocumentsToLexofficeOptions): Promise<SendDocumentsToLexofficeResult> => {

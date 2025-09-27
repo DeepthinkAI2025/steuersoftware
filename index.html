@@ -6,69 +6,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#3b82f6" />
     <meta name="description" content="Umfassende Buchhaltungs- und Steuersoftware mit KI-gestützter Belegerfassung" />
-    <link rel="manifest" href="/manifest.json" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <title>Steuer-KI-Agent Software</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            colors: {
-              // New, professional color palette inspired by OpenAI's aesthetic
-              slate: {
-                50: '#f8fafc',
-                100: '#f1f5f9',
-                200: '#e2e8f0',
-                300: '#cbd5e1',
-                400: '#94a3b8',
-                500: '#64748b',
-                600: '#475569',
-                700: '#334155',
-                800: '#1e293b',
-                900: '#0f172a',
-              },
-              blue: {
-                50: '#eff6ff',
-                100: '#dbeafe',
-                200: '#bfdbfe',
-                300: '#93c5fd',
-                400: '#60a5fa',
-                500: '#3b82f6',
-                600: '#2563eb',
-                700: '#1d4ed8',
-                800: '#1e40af',
-                900: '#1e3a8a',
-              },
-              // Legacy primary for potential compatibility, mapping to new blue
-              primary: {
-                '50': '#eff6ff',
-                '100': '#dbeafe',
-                '200': '#bfdbfe',
-                '300': '#93c5fd',
-                '400': '#60a5fa',
-                '500': '#3b82f6',
-                '600': '#2563eb',
-                '700': '#1d4ed8',
-                '800': '#1e40af',
-                '900': '#1e3a8a',
-                '950': '#172554',
-              },
-            }
-          }
-        }
-      }
-    </script>
-  <script type="importmap">
-{
-  "imports": {
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.16.0",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.1.1/",
-    "react/": "https://aistudiocdn.com/react@^19.1.1/",
-    "react": "https://aistudiocdn.com/react@^19.1.1"
-  }
-}
-</script>
-</head>
+  </head>
   <body class="bg-slate-50">
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>

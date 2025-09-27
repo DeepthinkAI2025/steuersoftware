@@ -15,11 +15,50 @@ interface ChatPanelProps {
     onOpenDocument: (docId: string) => void;
     onClose: () => void;
     systemPrompt: string;
+    onImportFromLexoffice?: (dateRange: { start: Date; end: Date }, includeDocuments: boolean) => Promise<void>;
 }
 
-const ChatPanel: React.FC<ChatPanelProps> = ({ apiKey, lexofficeApiKey, documents, rules, userProfile, onOpenDocument, onClose, systemPrompt }) => {
+const detectLexofficeImportIntent = (message: string) => {
+    const normalized = message.toLowerCase();
+    if (!normalized.includes('lexoffice')) return null;
+
+    const hasImportVerb = /(importier|import|hole|lade|synchronisiere)/.test(normalized);
+    if (!hasImportVerb) return null;
+
+    const yearMatch = message.match(/20\d{2}/);
+    if (yearMatch) {
+        const year = Number(yearMatch[0]);
+        if (!Number.isNaN(year)) {
+            const start = new Date(Date.UTC(year, 0, 1));
+            const end = new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999));
+            const toIsoDate = (date: Date) => date.toISOString().split('T')[0];
+            return {
+                dateRange: {
+                    start: toIsoDate(start),
+                    end: toIsoDate(end),
+                },
+                includeDocuments: true,
+            };
+        }
+    }
+
+    const now = new Date();
+    const startOfYear = new Date(Date.UTC(now.getFullYear(), 0, 1));
+    const endOfYear = new Date(Date.UTC(now.getFullYear(), 11, 31, 23, 59, 59, 999));
+    const toIsoDate = (date: Date) => date.toISOString().split('T')[0];
+
+    return {
+        dateRange: {
+            start: toIsoDate(startOfYear),
+            end: toIsoDate(endOfYear),
+        },
+        includeDocuments: true,
+    };
+};
+
+const ChatPanel: React.FC<ChatPanelProps> = ({ apiKey, lexofficeApiKey, documents, rules, userProfile, onOpenDocument, onClose, systemPrompt, onImportFromLexoffice }) => {
     const [messages, setMessages] = useState<ChatMessage[]>([
-        { role: 'model', content: 'Hallo! Ich bin Ihr KI-Steuerassistent. Fragen Sie mich nach Ihren Belegen, lassen Sie sich Finanzen zusammenfassen oder stellen Sie mir allgemeine Fragen zu Steuerfristen.', rawContent: 'Hallo! Ich bin Ihr KI-Steuerassistent. Fragen Sie mich nach Ihren Belegen, lassen Sie sich Finanzen zusammenfassen oder stellen Sie mir allgemeine Fragen zu Steuerfristen.' }
+        { role: 'model', content: 'Hallo! Ich bin Ihr KI-Steuerassistent. Ich kann Belege analysieren, Lexoffice-Imports für Sie anstoßen und Fragen zu Ihren Finanzen beantworten.', rawContent: 'Hallo! Ich bin Ihr KI-Steuerassistent. Ich kann Belege analysieren, Lexoffice-Imports für Sie anstoßen und Fragen zu Ihren Finanzen beantworten.' }
     ]);
     const [userInput, setUserInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
@@ -31,21 +70,66 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ apiKey, lexofficeApiKey, document
 
     useEffect(scrollToBottom, [messages]);
 
-    const handleToolUse = (toolName: string) => {
-        const actionMessage: ChatMessage = { role: 'model', content: 'Verstanden. Starte die Übertragung an Lexoffice...' };
-        setMessages(prev => [...prev, actionMessage]);
-        setIsLoading(true);
+    const handleToolUse = async (toolName: string, parameters?: any) => {
+        if (toolName === 'send_to_lexoffice') {
+            const actionMessage: ChatMessage = { role: 'model', content: 'Verstanden. Starte die Übertragung an Lexoffice...' };
+            setMessages(prev => [...prev, actionMessage]);
+            setIsLoading(true);
 
-        setTimeout(() => {
-            if (!lexofficeApiKey) {
-                const errorMessage: ChatMessage = { role: 'model', content: 'Fehler: Es wurde kein Lexoffice API-Schlüssel gefunden. Bitte fügen Sie ihn in den Einstellungen hinzu.' };
-                setMessages(prev => [...prev, errorMessage]);
-            } else {
-                const successMessage: ChatMessage = { role: 'model', content: `Erfolgreich! ${documents.length} Belege wurden an Lexoffice gesendet.` };
+            setTimeout(() => {
+                if (!lexofficeApiKey) {
+                    const errorMessage: ChatMessage = { role: 'model', content: 'Fehler: Es wurde kein Lexoffice API-Schlüssel gefunden. Bitte fügen Sie ihn in den Einstellungen hinzu.' };
+                    setMessages(prev => [...prev, errorMessage]);
+                } else {
+                    const successMessage: ChatMessage = { role: 'model', content: `Erfolgreich! ${documents.length} Belege wurden an Lexoffice gesendet.` };
+                    setMessages(prev => [...prev, successMessage]);
+                }
+                setIsLoading(false);
+            }, 2500);
+        } else if (toolName === 'import_from_lexoffice') {
+            const actionMessage: ChatMessage = { role: 'model', content: 'Verstanden. Importiere Daten aus Lexoffice...' };
+            setMessages(prev => [...prev, actionMessage]);
+            setIsLoading(true);
+
+            try {
+                if (!lexofficeApiKey) {
+                    const errorMessage: ChatMessage = { role: 'model', content: 'Fehler: Es wurde kein Lexoffice API-Schlüssel gefunden. Bitte fügen Sie ihn in den Einstellungen hinzu.' };
+                    setMessages(prev => [...prev, errorMessage]);
+                    setIsLoading(false);
+                    return;
+                }
+
+                if (!onImportFromLexoffice) {
+                    const errorMessage: ChatMessage = { role: 'model', content: 'Fehler: Der Import kann momentan nicht ausgeführt werden. Bitte versuchen Sie es über den Lexoffice-Bereich.' };
+                    setMessages(prev => [...prev, errorMessage]);
+                    setIsLoading(false);
+                    return;
+                }
+
+                if (!parameters?.dateRange) {
+                    const errorMessage: ChatMessage = { role: 'model', content: 'Fehler: Kein Zeitraum für den Import angegeben.' };
+                    setMessages(prev => [...prev, errorMessage]);
+                    setIsLoading(false);
+                    return;
+                }
+
+                const dateRange = {
+                    start: new Date(parameters.dateRange.start),
+                    end: new Date(parameters.dateRange.end)
+                };
+                const includeDocuments = parameters.includeDocuments ?? true;
+
+                await onImportFromLexoffice(dateRange, includeDocuments);
+
+                const successMessage: ChatMessage = { role: 'model', content: 'Import aus Lexoffice erfolgreich abgeschlossen.' };
                 setMessages(prev => [...prev, successMessage]);
+            } catch (error) {
+                const errorMessage: ChatMessage = { role: 'model', content: `Fehler beim Import: ${error instanceof Error ? error.message : 'Unbekannter Fehler'}` };
+                setMessages(prev => [...prev, errorMessage]);
+            } finally {
+                setIsLoading(false);
             }
-            setIsLoading(false);
-        }, 2500);
+        }
     };
 
 
@@ -59,6 +143,12 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ apiKey, lexofficeApiKey, document
         setUserInput('');
         setIsLoading(true);
 
+        const importIntent = detectLexofficeImportIntent(userInput);
+        if (importIntent) {
+            await handleToolUse('import_from_lexoffice', importIntent);
+            return;
+        }
+
         try {
             const responseText = await getChatResponse(apiKey, newMessages, documents, rules, userProfile, userInput, systemPrompt);
             
@@ -66,7 +156,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({ apiKey, lexofficeApiKey, document
             try {
                 const responseJson = JSON.parse(responseText);
                 if (responseJson.tool_use && responseJson.tool_use.name) {
-                    handleToolUse(responseJson.tool_use.name);
+                    await handleToolUse(responseJson.tool_use.name, responseJson.tool_use.parameters);
                     return; // Stop further processing
                 }
             } catch (error) {
