@@ -1,0 +1,20 @@
+[
+  {
+    "id": "doc-1759020398351-gkdzes",
+    "name": "AB-1086 WR ZOE Solar.pdf",
+    "originalName": "AB-1086 WR ZOE Solar.pdf",
+    "date": "2025-09-28T00:46:38.351Z",
+    "year": 2025,
+    "quarter": 3,
+    "source": "Manuell",
+    "status": "Analysiere...",
+    "fileUrl": "/uploads/1759020398340-djuf-AB-1086_WR_ZOE_Solar.pdf",
+    "invoiceType": "Eingangsrechnung",
+    "documentType": "Unbekannt",
+    "createdAt": "2025-09-28T00:46:38.351Z",
+    "updatedAt": "2025-09-28T00:46:38.351Z",
+    "tags": [],
+    "linkedTransactionIds": [],
+    "fileHash": "8dac58abf21812063443c6ef70604160408e62cbf8472c0f225449d07f2e4056"
+  }
+]

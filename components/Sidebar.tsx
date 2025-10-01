@@ -112,7 +112,7 @@ const SidebarContent: React.FC<Omit<SidebarProps, 'isMobileOpen' | 'setIsMobileO
         </div>
       </nav>
       {isSidebarOpen && <div className="mt-auto pt-4 border-t border-slate-200">
-        <p className="text-xs text-slate-500">Dies ist eine Demo-Anwendung. E-Mail- und WhatsApp-Integrationen sind simuliert und greifen nicht auf echte Konten zu.</p>
+  <p className="text-xs text-slate-500">Produktivmodus aktiv. Integrationen nur mit echten API-Schlüsseln nutzbar.</p>
       </div>}
     </>
   );

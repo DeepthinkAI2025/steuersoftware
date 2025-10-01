@@ -4,12 +4,18 @@ type DateRange = { start: Date; end: Date };
 
 const META_ENV = ((import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env) ?? {};
 
-const ENABLE_LIVE_LEXOFFICE = (META_ENV.VITE_LEXOFFICE_ENABLE_REAL_API ?? 'false') === 'true';
+// Live-Modus wird aktiviert, wenn explizit per Flag aktiviert ODER automatisch, sobald ein API-Key vorhanden ist.
+const ENABLE_LIVE_LEXOFFICE = ((META_ENV.VITE_LEXOFFICE_ENABLE_REAL_API ?? 'false') === 'true') || Boolean((META_ENV.VITE_LEXOFFICE_API_KEY ?? '').trim());
 const LEXOFFICE_API_BASE = (META_ENV.VITE_LEXOFFICE_API_BASE ?? 'https://api.lexoffice.io').replace(/\/$/, '');
 const LEXOFFICE_PROXY_BASE = (META_ENV.VITE_LEXOFFICE_PROXY_BASE ?? '').replace(/\/$/, '');
 const LEXOFFICE_PROXY_PORT = META_ENV.VITE_LEXOFFICE_PROXY_PORT ?? '5174';
+const FORCE_RELATIVE_PROXY = (META_ENV.VITE_LEXOFFICE_FORCE_RELATIVE ?? 'false') === 'true';
+const DEBUG_LEXOFFICE = (META_ENV.VITE_LEXOFFICE_DEBUG ?? 'false') === 'true';
 
 const resolveProxyBase = () => {
+  if (FORCE_RELATIVE_PROXY) {
+    return '';
+  }
   if (LEXOFFICE_PROXY_BASE) {
     return LEXOFFICE_PROXY_BASE;
   }
@@ -199,252 +205,6 @@ const isWithinRange = (iso: string, range?: DateRange) => {
   return value >= range.start && value <= range.end;
 };
 
-const SAMPLE_TRANSACTIONS: LexofficeTransactionPayload[] = [
-  {
-    id: 'lex-tx-2023-001',
-    description: 'Einspeisevergütung Januar 2023',
-    amount: 915.34,
-    date: isoDate(2023, 0, 31),
-    invoiceType: InvoiceType.OUTGOING,
-    taxCategory: 'Einnahmen USt 19%',
-    invoiceNumber: 'AR-2023-01',
-    hasDocument: true,
-  },
-  {
-    id: 'lex-tx-2023-002',
-    description: 'Anlagenversicherung Photovoltaik',
-    amount: -128.9,
-    date: isoDate(2023, 1, 12),
-    invoiceType: InvoiceType.INCOMING,
-    taxCategory: 'Versicherungen (betrieblich)',
-    invoiceNumber: 'RE-2023-22',
-    hasDocument: true,
-  },
-  {
-    id: 'lex-tx-2023-003',
-    description: 'Software-Wartung Jahreslizenz',
-    amount: -480,
-    date: isoDate(2023, 5, 1),
-    invoiceType: InvoiceType.INCOMING,
-    taxCategory: 'Software',
-    invoiceNumber: 'SW-2023-06',
-    hasDocument: true,
-  },
-  {
-    id: 'lex-tx-2023-004',
-    description: 'Lohnabrechnung März 2023',
-    amount: -4097.57,
-    date: isoDate(2023, 2, 28),
-    invoiceType: InvoiceType.INCOMING,
-    taxCategory: 'Personalaufwand',
-    invoiceNumber: 'PAY-2023-03',
-    hasDocument: true,
-  },
-  {
-    id: 'lex-tx-2023-005',
-    description: 'Büromiete Quartal 2/2023',
-    amount: -1702.16,
-    date: isoDate(2023, 3, 5),
-    invoiceType: InvoiceType.INCOMING,
-    taxCategory: 'Raumkosten',
-    invoiceNumber: 'M-2023-04',
-    hasDocument: true,
-  },
-  {
-    id: 'lex-tx-2023-006',
-    description: 'Telekommunikation April 2023',
-    amount: -136.18,
-    date: isoDate(2023, 3, 12),
-    invoiceType: InvoiceType.INCOMING,
-    taxCategory: 'Telekommunikation',
-    invoiceNumber: 'TEL-2023-04',
-    hasDocument: true,
-  },
-  {
-    id: 'lex-tx-2024-001',
-    description: 'Einspeisevergütung Januar 2024',
-    amount: 1012.55,
-    date: isoDate(2024, 0, 31),
-    invoiceType: InvoiceType.OUTGOING,
-    taxCategory: 'Einnahmen USt 19%',
-    invoiceNumber: 'AR-2024-01',
-    hasDocument: true,
-  },
-  {
-    id: 'lex-tx-2024-002',
-    description: 'Fahrzeug Leasingrate Q1',
-    amount: -589,
-    date: isoDate(2024, 2, 15),
-    invoiceType: InvoiceType.INCOMING,
-    taxCategory: 'Fahrzeugkosten',
-    invoiceNumber: 'RE-2024-11',
-    hasDocument: true,
-  },
-  {
-    id: 'lex-tx-2025-001',
-    description: 'Einspeisevergütung August 2025',
-    amount: 887.14,
-    date: isoDate(2025, 7, 31),
-    invoiceType: InvoiceType.OUTGOING,
-    taxCategory: 'Einnahmen USt 19%',
-    invoiceNumber: 'AR-2025-08',
-    hasDocument: true,
-  },
-  {
-    id: 'lex-tx-2025-002',
-    description: 'Cloud Speicher Gebühr',
-    amount: -72,
-    date: isoDate(2025, 6, 5),
-    invoiceType: InvoiceType.INCOMING,
-    taxCategory: 'Software',
-    invoiceNumber: 'SW-2025-07',
-    hasDocument: false,
-  },
-];
-
-const SAMPLE_DOCUMENTS: LexofficeDocumentPayload[] = [
-  {
-    id: 'lex-doc-2023-001',
-    transactionExternalId: 'lex-tx-2023-001',
-    filename: 'Gutschrift-Einspeise-01-2023.pdf',
-    url: 'https://lexoffice.example/gutschrift-2023-01.pdf',
-    issuedDate: isoDate(2023, 1, 2),
-    vendor: 'Netzbetreiber AG',
-    totalAmount: 915.34,
-    vatAmount: 145.39,
-    taxCategory: 'Einnahmen USt 19%',
-    invoiceType: InvoiceType.OUTGOING,
-    invoiceNumber: 'AR-2023-01',
-  },
-  {
-    id: 'lex-doc-2023-002',
-    transactionExternalId: 'lex-tx-2023-002',
-    filename: 'Rechnung-Versicherung-02-2023.pdf',
-    url: 'https://lexoffice.example/rechnung-versicherung-2023-02.pdf',
-    issuedDate: isoDate(2023, 1, 10),
-    vendor: 'Sicher AG',
-    totalAmount: 128.9,
-    vatAmount: 20.53,
-    taxCategory: 'Versicherungen (betrieblich)',
-    invoiceType: InvoiceType.INCOMING,
-    invoiceNumber: 'RE-2023-22',
-  },
-  {
-    id: 'lex-doc-2023-003',
-    transactionExternalId: 'lex-tx-2023-003',
-    filename: 'Wartungsvertrag-Software-2023.pdf',
-    url: 'https://lexoffice.example/wartung-software-2023.pdf',
-    issuedDate: isoDate(2023, 4, 28),
-    vendor: 'CloudApps GmbH',
-    totalAmount: 480,
-    vatAmount: 76.48,
-    taxCategory: 'Software',
-    invoiceType: InvoiceType.INCOMING,
-    invoiceNumber: 'SW-2023-06',
-  },
-  {
-    id: 'lex-doc-2023-004',
-    transactionExternalId: 'lex-tx-2023-004',
-    filename: 'Lohnabrechnung-03-2023.pdf',
-    url: 'https://lexoffice.example/lohnabrechnung-2023-03.pdf',
-    issuedDate: isoDate(2023, 2, 27),
-    vendor: 'Personalservice GmbH',
-    totalAmount: 4097.57,
-    vatAmount: 0,
-    taxCategory: 'Personalaufwand',
-    invoiceType: InvoiceType.INCOMING,
-    invoiceNumber: 'PAY-2023-03',
-  },
-  {
-    id: 'lex-doc-2023-005',
-    transactionExternalId: 'lex-tx-2023-005',
-    filename: 'Mietrechnung-Quartal-2-2023.pdf',
-    url: 'https://lexoffice.example/miete-2023-q2.pdf',
-    issuedDate: isoDate(2023, 3, 3),
-    vendor: 'Büropark Berlin KG',
-    totalAmount: 1702.16,
-    vatAmount: 272.35,
-    taxCategory: 'Raumkosten',
-    invoiceType: InvoiceType.INCOMING,
-    invoiceNumber: 'M-2023-04',
-  },
-  {
-    id: 'lex-doc-2023-006',
-    transactionExternalId: 'lex-tx-2023-006',
-    filename: 'Telekom-Rechnung-04-2023.pdf',
-    url: 'https://lexoffice.example/telekom-2023-04.pdf',
-    issuedDate: isoDate(2023, 3, 10),
-    vendor: 'Kommunik GmbH',
-    totalAmount: 136.18,
-    vatAmount: 21.72,
-    taxCategory: 'Telekommunikation',
-    invoiceType: InvoiceType.INCOMING,
-    invoiceNumber: 'TEL-2023-04',
-  },
-  {
-    id: 'lex-doc-2024-001',
-    transactionExternalId: 'lex-tx-2024-001',
-    filename: 'Gutschrift-Einspeise-01-2024.pdf',
-    url: 'https://lexoffice.example/gutschrift-2024-01.pdf',
-    issuedDate: isoDate(2024, 1, 1),
-    vendor: 'Netzbetreiber AG',
-    totalAmount: 1012.55,
-    vatAmount: 161.95,
-    taxCategory: 'Einnahmen USt 19%',
-    invoiceType: InvoiceType.OUTGOING,
-    invoiceNumber: 'AR-2024-01',
-  },
-  {
-    id: 'lex-doc-2024-002',
-    transactionExternalId: 'lex-tx-2024-002',
-    filename: 'Rechnung-Leasing-03-2024.pdf',
-    url: 'https://lexoffice.example/rechnung-leasing-2024-03.pdf',
-    issuedDate: isoDate(2024, 2, 16),
-    vendor: 'AutoLease GmbH',
-    totalAmount: 589,
-    vatAmount: 94.02,
-    taxCategory: 'Fahrzeugkosten',
-    invoiceType: InvoiceType.INCOMING,
-    invoiceNumber: 'RE-2024-11',
-  },
-  {
-    id: 'lex-doc-2025-001',
-    transactionExternalId: 'lex-tx-2025-001',
-    filename: 'Gutschrift-Einspeise-08-2025.pdf',
-    url: 'https://lexoffice.example/gutschrift-2025-08.pdf',
-    issuedDate: isoDate(2025, 8, 2),
-    vendor: 'Netzbetreiber AG',
-    totalAmount: 887.14,
-    vatAmount: 141.66,
-    taxCategory: 'Einnahmen USt 19%',
-    invoiceType: InvoiceType.OUTGOING,
-    invoiceNumber: 'AR-2025-08',
-  },
-];
-
-export const simulateLexofficeImport = async ({ dateRange, includeDocuments = true }: SimulateLexofficeImportOptions = {}): Promise<{
-  transactions: LexofficeTransactionPayload[];
-  documents?: LexofficeDocumentPayload[];
-  summary: LexofficeImportResult['summary'];
-}> => {
-  await new Promise(resolve => setTimeout(resolve, 250));
-
-  const transactions = SAMPLE_TRANSACTIONS.filter(tx => isWithinRange(tx.date, dateRange));
-  const transactionIds = new Set(transactions.map(tx => tx.id));
-
-  const documents = includeDocuments
-    ? SAMPLE_DOCUMENTS.filter(doc => transactionIds.has(doc.transactionExternalId ?? '') && isWithinRange(doc.issuedDate, dateRange))
-    : undefined;
-
-  const summary: LexofficeImportResult['summary'] = {
-    imported: transactions.length,
-    updated: 0,
-    skipped: SAMPLE_TRANSACTIONS.length - transactions.length,
-    missingReceipts: transactions.filter(tx => !tx.hasDocument).length,
-  };
-
-  return { transactions, documents, summary };
-};
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -885,59 +645,15 @@ const fetchDocumentsFromLexofficeLive = async (
   return documents;
 };
 
-const simulateSendToLexoffice = async ({ documents, onProgress }: SendDocumentsToLexofficeOptions) => {
-  const successIds: string[] = [];
-  const failed: Array<{ documentId: string; reason: string }> = [];
-  for (let index = 0; index < documents.length; index += 1) {
-    const document = documents[index];
-    onProgress?.(index, documents.length, document.id);
-    await wait(200);
-    const isSuccess = Math.random() > 0.1;
-    if (isSuccess) {
-      successIds.push(document.id);
-    } else {
-      failed.push({ documentId: document.id, reason: 'Simulation: zufälliger Fehler' });
-    }
-    onProgress?.(index + 1, documents.length, document.id);
-  }
-
-  return {
-    successIds,
-    failed,
-    mode: 'simulation' as const,
-  };
-};
-
-const buildSimulationResponse = async (options: SimulateLexofficeImportOptions, reason?: unknown): Promise<LexofficeImportResponse> => {
-  if (reason) {
-    console.warn('Lexoffice Live Import fehlgeschlagen – wechsle zur Simulation.', reason);
-  }
-  const simulated = await simulateLexofficeImport(options);
-  return {
-    ...simulated,
-    mode: 'simulation',
-  };
-};
 
 export const importFromLexoffice = async ({ apiKey, dateRange, includeDocuments = true }: ImportFromLexofficeOptions = {}) => {
-  const simulationOptions: SimulateLexofficeImportOptions = { dateRange, includeDocuments };
-  const liveRequested = liveModeOverride !== null ? liveModeOverride : ENABLE_LIVE_LEXOFFICE;
   const useLive = shouldUseLiveApi(apiKey);
-
   if (!useLive) {
-    if (liveRequested) {
-      throw new Error('Kein Lexoffice API-Schlüssel vorhanden oder ungültig.');
-    }
-    return buildSimulationResponse(simulationOptions);
+    throw new Error('Kein Lexoffice API-Schlüssel vorhanden oder ungültig.');
   }
 
   const effectiveKey = getEffectiveApiKey(apiKey);
-  if (!effectiveKey) {
-    if (liveRequested) {
-      throw new Error('Kein Lexoffice API-Schlüssel vorhanden.');
-    }
-    return buildSimulationResponse(simulationOptions, 'Kein API-Schlüssel – Simulation wird genutzt.');
-  }
+    if (!effectiveKey) throw new Error('Kein Lexoffice API-Schlüssel vorhanden.');
 
   try {
     const proxyBase = resolveProxyBase();
@@ -947,34 +663,60 @@ export const importFromLexoffice = async ({ apiKey, dateRange, includeDocuments 
       query.set('end', toIsoDate(dateRange.end));
     }
     query.set('includeDocuments', includeDocuments ? 'true' : 'false');
+    const attemptBases = Array.from(new Set([
+      proxyBase,
+      // Fallback: relative URL (Vite Dev Proxy)
+      '',
+    ]));
 
-    const proxyUrl = `${proxyBase}/api/lexoffice/import?${query.toString()}`;
-    const headers: HeadersInit = { Accept: 'application/json' };
-    if ((META_ENV.VITE_LEXOFFICE_PROXY_SKIP_KEY ?? 'false') !== 'true') {
-      headers['x-lexoffice-api-key'] = effectiveKey;
+    let payload: any = null;
+    let lastError: Error | null = null;
+
+    if (DEBUG_LEXOFFICE) {
+      console.log('[LexofficeImport] Starte Fetch Versuche', { attemptBases, query: query.toString(), includeDocuments });
     }
 
-    const response = await fetch(proxyUrl, {
-      method: 'GET',
-      headers,
-      credentials: 'include',
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text || `Lexoffice Proxy Fehler (${response.status})`);
+    for (const base of attemptBases) {
+      const url = `${base}/api/lexoffice/import?${query.toString()}`.replace(/([^:])\/+/g, '$1/');
+      const headers: HeadersInit = { Accept: 'application/json' };
+      if ((META_ENV.VITE_LEXOFFICE_PROXY_SKIP_KEY ?? 'false') !== 'true') {
+        headers['x-lexoffice-api-key'] = effectiveKey;
+      }
+      try {
+        const response = await fetch(url, { method: 'GET', headers, credentials: 'include' });
+        if (!response.ok) {
+          const text = await response.text();
+          // 404 -> nächsten Versuch probieren, falls weiterer Base vorhanden
+          if (response.status === 404 && base !== attemptBases[attemptBases.length - 1]) {
+            lastError = new Error(text || `404 ${url}`);
+            if (DEBUG_LEXOFFICE) {
+              console.warn('[LexofficeImport] 404 Versuch – fallback', { url });
+            }
+            continue;
+          }
+          throw new Error(text || `Lexoffice Proxy Fehler (${response.status})`);
+        }
+        payload = await response.json();
+        if (DEBUG_LEXOFFICE) {
+          console.log('[LexofficeImport] Antwort erhalten', { url, transactions: payload?.transactions?.length, documents: payload?.documents?.length });
+        }
+        lastError = null;
+        break;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        if (DEBUG_LEXOFFICE) {
+          console.error('[LexofficeImport] Fetch Fehler', { base, error: lastError.message });
+        }
+        continue;
+      }
     }
 
-    const payload = await response.json();
+      if (!payload) {
+        throw new Error('Lexoffice Proxy nicht erreichbar. Bitte starten Sie den Proxy-Server (npm run server) oder prüfen Sie die Proxy-URL.');
+      }
 
-    const transactions = Array.isArray(payload?.transactions)
-      ? payload.transactions.map(mapProxyTransaction)
-      : [];
-
-    const documents = includeDocuments && Array.isArray(payload?.documents)
-      ? payload.documents.map(mapProxyDocument)
-      : undefined;
-
+    const transactions = Array.isArray(payload?.transactions) ? payload.transactions.map(mapProxyTransaction) : [];
+    const documents = includeDocuments && Array.isArray(payload?.documents) ? payload.documents.map(mapProxyDocument) : undefined;
     const summary: LexofficeImportResult['summary'] = payload?.summary ?? {
       imported: transactions.length,
       updated: 0,
@@ -982,29 +724,23 @@ export const importFromLexoffice = async ({ apiKey, dateRange, includeDocuments 
       missingReceipts: transactions.filter(tx => !tx.hasDocument).length,
     };
 
-    return {
-      transactions,
-      documents,
-      summary,
-      mode: payload?.mode === 'simulation' ? 'simulation' : 'live',
-    } satisfies LexofficeImportResponse;
+  const result = { transactions, documents, summary, mode: 'live' as const } satisfies LexofficeImportResponse;
+    if (DEBUG_LEXOFFICE) {
+      console.log('[LexofficeImport] Ergebnis normalisiert', { mode: result.mode, tCount: result.transactions.length, dCount: result.documents?.length });
+    }
+    return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (liveRequested) {
-      if (message.includes('Failed to fetch')) {
-        throw new Error('Lexoffice Proxy nicht erreichbar. Bitte starten Sie den Proxy-Server (npm run server) oder prüfen Sie die Proxy-URL.');
-      }
-      throw error instanceof Error ? error : new Error(message);
+    if (message.includes('Failed to fetch')) {
+      throw new Error('Lexoffice Proxy nicht erreichbar. Bitte starten Sie den Proxy-Server (npm run server) oder prüfen Sie die Proxy-URL.');
     }
-    return buildSimulationResponse(simulationOptions, error);
+    throw error instanceof Error ? error : new Error(message);
   }
 
 };
 
 export const sendDocumentsToLexoffice = async ({ documents, apiKey, onProgress }: SendDocumentsToLexofficeOptions): Promise<SendDocumentsToLexofficeResult> => {
-  if (!shouldUseLiveApi(apiKey)) {
-    return simulateSendToLexoffice({ documents, apiKey, onProgress } as SendDocumentsToLexofficeOptions);
-  }
+  if (!shouldUseLiveApi(apiKey)) throw new Error('Kein Lexoffice Live Modus aktiviert.');
 
   const effectiveKey = getEffectiveApiKey(apiKey);
   if (!effectiveKey) {
@@ -1072,15 +808,7 @@ export const buildDocumentFromLexoffice = (payload: LexofficeDocumentPayload, st
 
 // CRUD Operations for Vouchers
 export const createVoucherInLexoffice = async (voucher: LexofficeVoucher, apiKey?: string): Promise<CrudOperationResult> => {
-  if (!shouldUseLiveApi(apiKey)) {
-    await wait(300);
-    return {
-      success: Math.random() > 0.1,
-      id: generateFallbackId(),
-      mode: 'simulation',
-      error: Math.random() > 0.1 ? undefined : 'Simulation: Zufälliger Fehler beim Erstellen',
-    };
-  }
+  if (!shouldUseLiveApi(apiKey)) throw new Error('Live-Modus erforderlich');
 
   const effectiveKey = getEffectiveApiKey(apiKey);
   if (!effectiveKey) {
@@ -1110,15 +838,7 @@ export const createVoucherInLexoffice = async (voucher: LexofficeVoucher, apiKey
 };
 
 export const updateVoucherInLexoffice = async (voucherId: string, voucher: Partial<LexofficeVoucher>, apiKey?: string): Promise<CrudOperationResult> => {
-  if (!shouldUseLiveApi(apiKey)) {
-    await wait(300);
-    return {
-      success: Math.random() > 0.1,
-      id: voucherId,
-      mode: 'simulation',
-      error: Math.random() > 0.1 ? undefined : 'Simulation: Zufälliger Fehler beim Aktualisieren',
-    };
-  }
+  if (!shouldUseLiveApi(apiKey)) throw new Error('Live-Modus erforderlich');
 
   const effectiveKey = getEffectiveApiKey(apiKey);
   if (!effectiveKey) {
@@ -1147,15 +867,7 @@ export const updateVoucherInLexoffice = async (voucherId: string, voucher: Parti
 };
 
 export const deleteVoucherInLexoffice = async (voucherId: string, apiKey?: string): Promise<CrudOperationResult> => {
-  if (!shouldUseLiveApi(apiKey)) {
-    await wait(300);
-    return {
-      success: Math.random() > 0.1,
-      id: voucherId,
-      mode: 'simulation',
-      error: Math.random() > 0.1 ? undefined : 'Simulation: Zufälliger Fehler beim Löschen',
-    };
-  }
+  if (!shouldUseLiveApi(apiKey)) throw new Error('Live-Modus erforderlich');
 
   const effectiveKey = getEffectiveApiKey(apiKey);
   if (!effectiveKey) {
@@ -1183,15 +895,7 @@ export const deleteVoucherInLexoffice = async (voucherId: string, apiKey?: strin
 
 // CRUD Operations for Contacts
 export const createContactInLexoffice = async (contact: LexofficeContact, apiKey?: string): Promise<CrudOperationResult> => {
-  if (!shouldUseLiveApi(apiKey)) {
-    await wait(300);
-    return {
-      success: Math.random() > 0.1,
-      id: generateFallbackId(),
-      mode: 'simulation',
-      error: Math.random() > 0.1 ? undefined : 'Simulation: Zufälliger Fehler beim Erstellen',
-    };
-  }
+  if (!shouldUseLiveApi(apiKey)) throw new Error('Live-Modus erforderlich');
 
   const effectiveKey = getEffectiveApiKey(apiKey);
   if (!effectiveKey) {
@@ -1230,15 +934,7 @@ export const createContactInLexoffice = async (contact: LexofficeContact, apiKey
 };
 
 export const updateContactInLexoffice = async (contactId: string, contact: Partial<LexofficeContact>, apiKey?: string): Promise<CrudOperationResult> => {
-  if (!shouldUseLiveApi(apiKey)) {
-    await wait(300);
-    return {
-      success: Math.random() > 0.1,
-      id: contactId,
-      mode: 'simulation',
-      error: Math.random() > 0.1 ? undefined : 'Simulation: Zufälliger Fehler beim Aktualisieren',
-    };
-  }
+  if (!shouldUseLiveApi(apiKey)) throw new Error('Live-Modus erforderlich');
 
   const effectiveKey = getEffectiveApiKey(apiKey);
   if (!effectiveKey) {
@@ -1276,15 +972,7 @@ export const updateContactInLexoffice = async (contactId: string, contact: Parti
 };
 
 export const deleteContactInLexoffice = async (contactId: string, apiKey?: string): Promise<CrudOperationResult> => {
-  if (!shouldUseLiveApi(apiKey)) {
-    await wait(300);
-    return {
-      success: Math.random() > 0.1,
-      id: contactId,
-      mode: 'simulation',
-      error: Math.random() > 0.1 ? undefined : 'Simulation: Zufälliger Fehler beim Löschen',
-    };
-  }
+  if (!shouldUseLiveApi(apiKey)) throw new Error('Live-Modus erforderlich');
 
   const effectiveKey = getEffectiveApiKey(apiKey);
   if (!effectiveKey) {
@@ -1311,34 +999,7 @@ export const deleteContactInLexoffice = async (contactId: string, apiKey?: strin
 };
 
 export const fetchVouchersFromLexoffice = async (apiKey?: string): Promise<LexofficeVoucher[]> => {
-  if (!shouldUseLiveApi(apiKey)) {
-    await wait(500);
-    // Return mock data for simulation
-    return [
-      {
-        id: 'voucher-1',
-        voucherType: 'purchase',
-        voucherDate: '2024-01-15',
-        reference: 'INV-001',
-        totalAmount: { totalGrossAmount: 119.00, currency: 'EUR' },
-        lineItems: [{
-          amount: { netAmount: 100.00, taxRatePercent: 19 },
-          description: 'Büromaterial'
-        }]
-      },
-      {
-        id: 'voucher-2',
-        voucherType: 'sales',
-        voucherDate: '2024-01-20',
-        reference: 'SALE-001',
-        totalAmount: { totalGrossAmount: 238.00, currency: 'EUR' },
-        lineItems: [{
-          amount: { netAmount: 200.00, taxRatePercent: 19 },
-          description: 'Beratungsleistung'
-        }]
-      }
-    ];
-  }
+  if (!shouldUseLiveApi(apiKey)) throw new Error('Live-Modus erforderlich');
 
   const effectiveKey = getEffectiveApiKey(apiKey);
   if (!effectiveKey) {
@@ -1361,28 +1022,7 @@ export const fetchVouchersFromLexoffice = async (apiKey?: string): Promise<Lexof
 };
 
 export const fetchContactsFromLexoffice = async (apiKey?: string): Promise<LexofficeContact[]> => {
-  if (!shouldUseLiveApi(apiKey)) {
-    await wait(500);
-    // Return mock data for simulation
-    return [
-      {
-        id: 'contact-1',
-        name: 'Musterfirma GmbH',
-        email: 'info@musterfirma.de',
-        phone: '+49 123 456789',
-        role: 'both',
-        number: 'CUST-001'
-      },
-      {
-        id: 'contact-2',
-        name: 'Lieferant AG',
-        email: 'bestellung@lieferant.de',
-        phone: '+49 987 654321',
-        role: 'supplier',
-        number: 'SUPP-001'
-      }
-    ];
-  }
+  if (!shouldUseLiveApi(apiKey)) throw new Error('Live-Modus erforderlich');
 
   const effectiveKey = getEffectiveApiKey(apiKey);
   if (!effectiveKey) {

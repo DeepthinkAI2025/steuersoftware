@@ -8,6 +8,7 @@ import CopyIcon from './icons/CopyIcon';
 import SparklesIcon from './icons/SparklesIcon';
 import FolderIcon from './icons/FolderIcon';
 import LexofficeIcon from './icons/LexofficeIcon';
+import TrashIcon from './icons/TrashIcon';
 
 interface DocumentItemProps {
   document: Document;
@@ -20,9 +21,11 @@ interface DocumentItemProps {
   onUpdateStorage: (id: string, storageId?: string) => void;
   onReanalyze: (document: Document) => void;
   isReanalyzing: boolean;
+  onCompareDuplicate: (document: Document) => void;
+  onDelete: (id: string) => void;
 }
 
-const DocumentItem: React.FC<DocumentItemProps> = ({ document, onSelect, isSelected, onToggleSelection, onSendToLexoffice, isSendingToLexoffice, storageLocations, onUpdateStorage, onReanalyze, isReanalyzing }) => {
+const DocumentItem: React.FC<DocumentItemProps> = ({ document, onSelect, isSelected, onToggleSelection, onSendToLexoffice, isSendingToLexoffice, storageLocations, onUpdateStorage, onReanalyze, isReanalyzing, onCompareDuplicate, onDelete }) => {
   const formatDate = (date: Date) => {
     return new Intl.DateTimeFormat('de-DE', {
       year: 'numeric',
@@ -138,6 +141,14 @@ const DocumentItem: React.FC<DocumentItemProps> = ({ document, onSelect, isSelec
                   <span>{statusInfo.text}</span>
                 </span>
               )}
+              {document.status === DocumentStatus.POTENTIAL_DUPLICATE && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onCompareDuplicate(document); }}
+                  className="inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-semibold text-orange-700 hover:bg-orange-200"
+                >
+                  Vergleichen
+                </button>
+              )}
               {hasWarnings && (
                 <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800" title="Warnungen oder fehlende Angaben erkannt">
                   <AlertTriangleIcon className="h-3.5 w-3.5" />
@@ -207,6 +218,15 @@ const DocumentItem: React.FC<DocumentItemProps> = ({ document, onSelect, isSelec
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onDelete(document.id); }}
+              className="inline-flex items-center gap-2 rounded-full border border-red-200 bg-red-50 px-3 py-1 text-xs font-semibold text-red-700 hover:bg-red-100"
+              title="Diesen Beleg löschen"
+            >
+              <TrashIcon className="h-3.5 w-3.5" />
+              Löschen
+            </button>
             <button
               type="button"
               onClick={handleReanalyzeClick}

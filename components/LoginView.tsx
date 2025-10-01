@@ -23,42 +23,50 @@ const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
     <div className="flex items-center justify-center min-h-screen bg-slate-50">
       <div className="w-full max-w-sm p-8 space-y-6">
         <div className="flex flex-col items-center">
-          <div className="bg-blue-600 text-white rounded-lg p-3 mb-4">
-            <svg xmlns="http://www.w.org/2000/svg" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+          <div className="bg-gradient-to-br from-blue-600 to-blue-500 text-white rounded-xl p-3 mb-4 shadow ring-1 ring-inset ring-white/20">
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
           </div>
-          <h1 className="text-2xl font-bold text-slate-800">Willkommen beim Steuer Agent</h1>
-          <p className="text-slate-500">Bitte melden Sie sich an, um fortzufahren.</p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Willkommen beim Steuer Agent</h1>
+          <p className="text-slate-500 text-sm">Bitte melden Sie sich an, um fortzufahren.</p>
         </div>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label htmlFor="username" className="text-sm font-medium text-slate-700">Benutzername</label>
-            <input
-              id="username"
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              required
-              className="w-full px-3 py-2 mt-1 border border-slate-300 rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500"
-            />
-          </div>
-          <div>
-            <label htmlFor="password" className="text-sm font-medium text-slate-700">Passwort</label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              className="w-full px-3 py-2 mt-1 border border-slate-300 rounded-lg shadow-sm focus:ring-blue-500 focus:border-blue-500"
-            />
-          </div>
-          {error && <p className="text-sm text-red-600">{error}</p>}
-          <div className="text-center text-xs text-slate-400">
-            Demo: <span className="font-mono">admin</span> / <span className="font-mono">admin</span>
+        <form onSubmit={handleSubmit} className="space-y-5 card animate-[fadeIn_.4s_ease]">
+          <div className="space-y-4">
+            <div>
+              <label htmlFor="username" className="form-label">Benutzername</label>
+              <input
+                id="username"
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                required
+                className="input"
+                placeholder="admin"
+                autoComplete="username"
+              />
+            </div>
+            <div>
+              <label htmlFor="password" className="form-label">Passwort</label>
+              <input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                className="input"
+                placeholder="••••••"
+                autoComplete="current-password"
+              />
+            </div>
+            {error && <p className="text-sm font-medium text-red-600 bg-red-50 border border-red-200 rounded-md px-3 py-2">{error}</p>}
+            <div className="text-center text-xs text-slate-500">
+              Login
+            </div>
           </div>
           <button
             type="submit"
-            className="w-full py-2.5 px-4 font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+            className="btn-primary w-full"
           >
             Anmelden
           </button>

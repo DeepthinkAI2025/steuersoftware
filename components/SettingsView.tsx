@@ -19,6 +19,8 @@ interface SettingsViewProps {
   chatSystemPrompt: string;
   setChatSystemPrompt: (prompt: string) => void;
   DEFAULT_CHAT_PROMPT: string;
+  geminiEnvProvided?: boolean;
+  lexofficeEnvProvided?: boolean;
 }
 
 const SettingsCard: React.FC<{ title: string; description: string; children: React.ReactNode }> = ({ title, description, children }) => (
@@ -30,7 +32,7 @@ const SettingsCard: React.FC<{ title: string; description: string; children: Rea
 );
 
 
-const SettingsView: React.FC<SettingsViewProps> = ({ setDocuments, apiKey, setApiKey, lexofficeApiKey, setLexofficeApiKey, lexofficeLiveEnabled, setLexofficeLiveEnabled, notificationSettings, setNotificationSettings, chatSystemPrompt, setChatSystemPrompt, DEFAULT_CHAT_PROMPT }) => {
+const SettingsView: React.FC<SettingsViewProps> = ({ setDocuments, apiKey, setApiKey, lexofficeApiKey, setLexofficeApiKey, lexofficeLiveEnabled, setLexofficeLiveEnabled, notificationSettings, setNotificationSettings, chatSystemPrompt, setChatSystemPrompt, DEFAULT_CHAT_PROMPT, geminiEnvProvided, lexofficeEnvProvided }) => {
   const [emails, setEmails] = useState<string[]>(['anna.muster@mail.com', 'privat@email.de']);
   const [newEmail, setNewEmail] = useState('');
   const [scanPeriod, setScanPeriod] = useState<string>('30');
@@ -101,9 +103,10 @@ const SettingsView: React.FC<SettingsViewProps> = ({ setDocuments, apiKey, setAp
                     type={showGeminiKey ? 'text' : 'password'}
                     id="api-key"
                     value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="Geben Sie Ihren API-Schlüssel hier ein"
-                    className="w-full p-2 pr-24 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    onChange={(e) => !geminiEnvProvided && setApiKey(e.target.value)}
+                    placeholder={geminiEnvProvided ? 'Bereitgestellt via ENV (readonly)' : 'Geben Sie Ihren API-Schlüssel hier ein'}
+                    className={`w-full p-2 pr-24 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${geminiEnvProvided ? 'bg-slate-100 cursor-not-allowed opacity-80' : ''}`}
+                    disabled={geminiEnvProvided}
                   />
                   <button
                     type="button"
@@ -113,6 +116,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ setDocuments, apiKey, setAp
                     {showGeminiKey ? 'Verbergen' : 'Anzeigen'}
                   </button>
                 </div>
+                {geminiEnvProvided && <p className="mt-1 text-xs text-green-600">Wird automatisch aus Build-Umgebung geladen.</p>}
             </div>
             <div>
                 <label htmlFor="lexoffice-api-key" className="block text-sm font-medium text-slate-700 mb-1">Lexoffice API Schlüssel</label>
@@ -121,9 +125,10 @@ const SettingsView: React.FC<SettingsViewProps> = ({ setDocuments, apiKey, setAp
                     type={showLexofficeKey ? 'text' : 'password'}
                     id="lexoffice-api-key"
                     value={lexofficeApiKey}
-                    onChange={(e) => setLexofficeApiKey(e.target.value)}
-                    placeholder="Geben Sie Ihren Lexoffice API-Schlüssel ein"
-                    className="w-full p-2 pr-24 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    onChange={(e) => !lexofficeEnvProvided && setLexofficeApiKey(e.target.value)}
+                    placeholder={lexofficeEnvProvided ? 'Bereitgestellt via ENV (readonly)' : 'Geben Sie Ihren Lexoffice API-Schlüssel ein'}
+                    className={`w-full p-2 pr-24 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${lexofficeEnvProvided ? 'bg-slate-100 cursor-not-allowed opacity-80' : ''}`}
+                    disabled={lexofficeEnvProvided}
                   />
                   <button
                     type="button"
@@ -133,6 +138,7 @@ const SettingsView: React.FC<SettingsViewProps> = ({ setDocuments, apiKey, setAp
                     {showLexofficeKey ? 'Verbergen' : 'Anzeigen'}
                   </button>
                 </div>
+                {lexofficeEnvProvided && <p className="mt-1 text-xs text-green-600">Wird automatisch aus Build-Umgebung geladen.</p>}
             </div>
             <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 p-3">
               <div className="pr-4">

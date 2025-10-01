@@ -66,6 +66,29 @@ export default defineConfig(({ mode }) => {
         host: '0.0.0.0',
         port: Number(env.VITE_DEV_PORT ?? 5173),
         strictPort: true,
+        proxy: {
+          '/api': {
+            target: `http://localhost:${env.VITE_LEXOFFICE_PROXY_PORT || 5174}`,
+            changeOrigin: true,
+            secure: false,
+            configure: (proxy) => {
+              proxy.on('error', (err) => {
+                console.error('[Vite Proxy] API Proxy Fehler:', err.message);
+              });
+            },
+          },
+          '/api/lexoffice': {
+            target: `http://localhost:${env.VITE_LEXOFFICE_PROXY_PORT || 5174}`,
+            changeOrigin: true,
+            secure: false,
+            // Nur weiterleiten, wenn kein anderer Origin gesetzt ist
+            configure: (proxy) => {
+              proxy.on('error', (err) => {
+                console.error('[Vite Proxy] Lexoffice Proxy Fehler:', err.message);
+              });
+            },
+          },
+        },
       },
       preview: {
         host: '0.0.0.0',

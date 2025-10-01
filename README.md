@@ -72,11 +72,20 @@ VITE_LEXOFFICE_ENABLE_REAL_API=false
 ```
 
 ### 4. Entwicklungsserver starten
+
+Starte Backend und Frontend in separaten Terminals:
+
 ```bash
+# Terminal 1 – API- und Upload-Server
+npm run server
+```
+
+```bash
+# Terminal 2 – Frontend
 npm run dev
 ```
 
-Die Anwendung ist nun unter `http://localhost:5173` verfügbar.
+Die Anwendung ist nun unter `http://localhost:5173` verfügbar. Das Frontend greift über den Proxy auf den lokalen Server (`http://localhost:5174`) zu, daher muss `npm run server` durchgehend laufen.
 
 ### 5. Produktions-Build erstellen
 ```bash

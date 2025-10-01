@@ -31,7 +31,9 @@ const fileToGenerativePart = async (file: File) => {
     };
 };
 
-const GEMINI_MODEL = 'gemini-2.5-pro';
+const GEMINI_ANALYSIS_MODEL = 'gemini-1.5-pro';
+const GEMINI_VISION_MODEL = 'gemini-pro-vision';
+const GEMINI_VISION_MODEL = 'gemini-pro-vision';
 
 export const createSuggestedFileName = (result: GeminiAnalysisResult, originalExtension: string): string => {
     const { vendor, totalAmount, documentDate } = result;
@@ -69,9 +71,10 @@ export const analyzeDocument = async (file: File, rules: Rule[], apiKey: string)
         await new Promise(resolve => setTimeout(resolve, 1500));
         const randomAmount = Math.random() * 200 + 10;
         const mockResult: GeminiAnalysisResult = {
-            isInvoice: !file.name.toLowerCase().includes('bestätigung'),
+            isInvoice: !file.name.toLowerCase().includes('bestätigung') && !file.name.toLowerCase().includes('angebot'),
             isOrderConfirmation: file.name.toLowerCase().includes('bestätigung'),
             isEmailBody: file.name.toLowerCase().includes('email'),
+            documentType: file.name.toLowerCase().includes('bestätigung') ? 'Bestellbestätigung' : file.name.toLowerCase().includes('angebot') ? 'Angebot' : 'Rechnung',
             documentDate: new Date().toISOString(),
             textContent: `Dies ist ein simulierter OCR-Text für die Datei ${file.name}.\nRechnungsnummer: 12345\nBetrag: ${randomAmount.toFixed(2)} EUR\nDatum: ${new Date().toLocaleDateString('de-DE')}\nFirma: ${file.name.toLowerCase().includes('zoe') ? 'ZOE Solar' : 'Bauhaus' }`,
             vendor: file.name.toLowerCase().includes('zoe') ? 'ZOE Solar' : 'Bauhaus',
@@ -98,35 +101,43 @@ export const analyzeDocument = async (file: File, rules: Rule[], apiKey: string)
     try {
         const imagePart = await fileToGenerativePart(file);
 
-        const response: GenerateContentResponse = await ai.models.generateContent({
-            model: GEMINI_MODEL,
-            contents: {
-                parts: [
-                    imagePart,
-                    { text: `Analysiere das Dokument sorgfältig. Führe eine OCR durch, um den gesamten Text zu extrahieren. Identifiziere Rechnungsdatum, Rechnungsnummer, Verkäufer, Bruttobetrag und MwSt.-Betrag. Klassifiziere als Eingangsrechnung (Ausgabe) oder Ausgangsrechnung (Einnahme). Basierend auf dem Verkäufer und dem Inhalt, schlage eine passende Steuerkategorie vor. Beispiele: 'Material/Waren' für Baumärkte, 'Kraftstoff' für Tankstellen, 'Photovoltaik' für Solaranlagen ohne MwSt., 'Einnahmen' für Rechnungen mit MwSt. von Energieunternehmen. Nutze 'Sonstiges' nur, wenn keine spezifischere Kategorie passt. Gib ausschließlich das JSON-Objekt zurück.` }
-                ]
-            },
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        isInvoice: { type: Type.BOOLEAN },
-                        isOrderConfirmation: { type: Type.BOOLEAN },
-                        isEmailBody: { type: Type.BOOLEAN },
-                        documentDate: { type: Type.STRING },
-                        textContent: { type: Type.STRING },
-                        vendor: { type: Type.STRING },
-                        totalAmount: { type: Type.NUMBER },
-                        vatAmount: { type: Type.NUMBER },
-                        invoiceNumber: { type: Type.STRING },
-                        invoiceType: { type: Type.STRING, enum: [InvoiceType.INCOMING, InvoiceType.OUTGOING] },
-                        taxCategory: { type: Type.STRING }
-                    },
-                    required: ["isInvoice", "isOrderConfirmation", "isEmailBody", "documentDate", "textContent", "vendor", "totalAmount", "vatAmount", "invoiceNumber", "invoiceType", "taxCategory"],
+        const timeoutPromise = new Promise<GenerateContentResponse>((_, reject) => 
+          setTimeout(() => reject(new Error('Die Analyseanfrage hat das Zeitlimit überschritten.')), 30000) // 30 Sekunden Timeout
+        );
+
+        const response: GenerateContentResponse = await Promise.race([
+            ai.models.generateContent({
+                model: GEMINI_MODEL,
+                contents: {
+                    parts: [
+                        imagePart,
+                        { text: `Analysiere das Dokument sorgfältig. Führe eine OCR durch, um den gesamten Text zu extrahieren. Identifiziere den Dokumenttyp: 'Rechnung' für Rechnungen, 'Angebot' für Angebote, 'Bestellbestätigung' für Bestellbestätigungen, 'Unbekannt' für andere. Identifiziere Rechnungsdatum, Rechnungsnummer, Verkäufer, Bruttobetrag und MwSt.-Betrag. Klassifiziere als Eingangsrechnung (Ausgabe) oder Ausgangsrechnung (Einnahme). Basierend auf dem Verkäufer und dem Inhalt, schlage eine passende Steuerkategorie vor. Beispiele: 'Material/Waren' für Baumärkte, 'Kraftstoff' für Tankstellen, 'Photovoltaik' für Solaranlagen ohne MwSt., 'Einnahmen' für Rechnungen mit MwSt. von Energieunternehmen. Nutze 'Sonstiges' nur, wenn keine spezifischere Kategorie passt. Gib ausschließlich das JSON-Objekt zurück.` }
+                    ]
                 },
-            },
-        });
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: Type.OBJECT,
+                        properties: {
+                            isInvoice: { type: Type.BOOLEAN },
+                            isOrderConfirmation: { type: Type.BOOLEAN },
+                            isEmailBody: { type: Type.BOOLEAN },
+                            documentType: { type: Type.STRING, enum: ['Rechnung', 'Angebot', 'Bestellbestätigung', 'Unbekannt'] },
+                            documentDate: { type: Type.STRING },
+                            textContent: { type: Type.STRING },
+                            vendor: { type: Type.STRING },
+                            totalAmount: { type: Type.NUMBER },
+                            vatAmount: { type: Type.NUMBER },
+                            invoiceNumber: { type: Type.STRING },
+                            invoiceType: { type: Type.STRING, enum: [InvoiceType.INCOMING, InvoiceType.OUTGOING] },
+                            taxCategory: { type: Type.STRING }
+                        },
+                        required: ["isInvoice", "isOrderConfirmation", "isEmailBody", "documentType", "documentDate", "textContent", "vendor", "totalAmount", "vatAmount", "invoiceNumber", "invoiceType", "taxCategory"],
+                    },
+                },
+            }),
+            timeoutPromise
+        ]);
         
         const jsonStr = response.text.trim();
         const rawResult: GeminiAnalysisResult = JSON.parse(jsonStr);
@@ -157,6 +168,11 @@ const describeConfidence = (value: number): string => {
 
 const buildDefaultFieldConfidences = (result: GeminiAnalysisResult): OcrFieldConfidence[] => {
     return [
+        {
+            field: 'documentType',
+            value: result.documentType,
+            confidence: clampConfidence(86),
+        },
         {
             field: 'vendor',
             value: result.vendor || '',
@@ -229,6 +245,8 @@ const ensureExtendedAnalysisData = (result: GeminiAnalysisResult): GeminiAnalysi
 
     const synchronizedFields = baseFields.map(field => {
         switch (field.field) {
+            case 'documentType':
+                return { ...field, value: result.documentType };
             case 'vendor':
                 return { ...field, value: result.vendor || '' };
             case 'invoiceNumber':
@@ -278,7 +296,7 @@ export const buildOcrMetadataFromAnalysis = (analysis: GeminiAnalysisResult): Do
     return {
         averageConfidence: enriched.averageConfidence ?? 85,
         analysedAt: new Date(),
-        engineVersion: GEMINI_MODEL,
+        engineVersion: GEMINI_ANALYSIS_MODEL,
         pageCount: enriched.pageCount,
         fields: enriched.fieldConfidences ?? [],
         warnings: enriched.warnings,
@@ -302,7 +320,7 @@ export const getDocumentStatusFromAnalysis = (analysis: GeminiAnalysisResult, ex
         }
     }
 
-    if (analysis.isOrderConfirmation && !analysis.isInvoice) return DocumentStatus.MISSING_INVOICE;
+    if (analysis.documentType !== 'Rechnung') return DocumentStatus.MISSING_INVOICE;
     if (analysis.isEmailBody && !analysis.isInvoice) return DocumentStatus.SCREENSHOT;
     return DocumentStatus.OK;
 };
@@ -373,7 +391,7 @@ export const getChatResponse = async (apiKey: string, history: ChatMessage[], do
 
     try {
         const chat = ai.chats.create({
-            model: GEMINI_MODEL,
+            model: GEMINI_ANALYSIS_MODEL,
             config: { systemInstruction },
             history: history.map(msg => ({
                 role: msg.role,
@@ -426,7 +444,7 @@ export const findFundingOpportunities = async (apiKey: string, userProfile: User
 
     try {
           const response = await ai.models.generateContent({
-              model: GEMINI_MODEL,
+              model: GEMINI_ANALYSIS_MODEL,
            contents: prompt,
            config: {
              tools: [{googleSearch: {}}],

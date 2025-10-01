@@ -28,6 +28,10 @@ interface DocumentsViewProps {
   setStorageLocations: React.Dispatch<React.SetStateAction<StorageLocation[]>>;
   onReanalyzeDocument: (document: Document) => Promise<void>;
   reanalyzingDocumentIds: string[];
+  onUploadSuccess: (message: string) => void;
+  onUploadError: (message: string) => void;
+  onDuplicateDetected: (doc: Document) => void;
+  onCompareDuplicate: (doc: Document) => void;
 }
 
 interface GroupedDocuments {
@@ -36,7 +40,7 @@ interface GroupedDocuments {
   };
 }
 
-const DocumentsView: React.FC<DocumentsViewProps> = ({ documents, setDocuments, activeFilter, rules, onRuleSuggestion, apiKey, lexofficeApiKey, onSelectDocument, storageLocations, setStorageLocations, onReanalyzeDocument, reanalyzingDocumentIds }) => {
+const DocumentsView: React.FC<DocumentsViewProps> = ({ documents, setDocuments, activeFilter, rules, onRuleSuggestion, apiKey, lexofficeApiKey, onSelectDocument, storageLocations, setStorageLocations, onReanalyzeDocument, reanalyzingDocumentIds, onUploadSuccess, onUploadError, onDuplicateDetected, onCompareDuplicate }) => {
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState<{ [key: string]: boolean }>({ [new Date().getFullYear()]: true, [`${new Date().getFullYear()}-Q${Math.floor((new Date().getMonth() + 3) / 3)}`]: true});
   const [searchQuery, setSearchQuery] = useState('');
@@ -181,12 +185,76 @@ const DocumentsView: React.FC<DocumentsViewProps> = ({ documents, setDocuments, 
     }
   };
 
-  const handleDelete = () => {
-    if (window.confirm(`Möchten Sie ${selectedDocumentIds.size} Beleg(e) wirklich endgültig löschen?`)) {
-        setDocuments(prev => prev.filter(doc => !selectedDocumentIds.has(doc.id)));
+  const handleDeleteSingle = useCallback((id: string) => {
+    if (!window.confirm('Möchten Sie diesen Beleg wirklich endgültig löschen?')) return;
+
+    (async () => {
+      try {
+        const response = await fetch(`/api/documents/${id}`, { method: 'DELETE' });
+        if (!response.ok && response.status !== 404) {
+          throw new Error(await response.text());
+        }
+
+        setDocuments(prev => prev.filter(doc => doc.id !== id));
+        setSelectedDocumentIds(prev => {
+          if (!prev.has(id)) return prev;
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+        onUploadSuccess('Beleg gelöscht.');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Löschen fehlgeschlagen.';
+        onUploadError(message);
+      }
+    })();
+  }, [onUploadError, onUploadSuccess, setDocuments]);
+
+  const handleDelete = useCallback(() => {
+    if (selectedDocumentIds.size === 0) return;
+    if (!window.confirm(`Möchten Sie ${selectedDocumentIds.size} Beleg(e) wirklich endgültig löschen?`)) return;
+
+    const ids = Array.from(selectedDocumentIds);
+    const idsSet = new Set(ids);
+
+    (async () => {
+      try {
+        await Promise.all(ids.map(async id => {
+          const response = await fetch(`/api/documents/${id}`, { method: 'DELETE' });
+          if (!response.ok && response.status !== 404) {
+            throw new Error(await response.text());
+          }
+        }));
+
+        setDocuments(prev => prev.filter(doc => !idsSet.has(doc.id)));
         setSelectedDocumentIds(new Set());
-    }
-  };
+        onUploadSuccess(`${ids.length} Beleg(e) gelöscht.`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Löschen fehlgeschlagen.';
+        onUploadError(message);
+      }
+    })();
+  }, [onUploadError, onUploadSuccess, selectedDocumentIds, setDocuments]);
+
+  const handleDeleteAll = useCallback(() => {
+    if (documents.length === 0) return;
+    if (!window.confirm('Möchten Sie wirklich alle Belege dauerhaft löschen?')) return;
+
+    (async () => {
+      try {
+        const response = await fetch('/api/documents', { method: 'DELETE' });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        setDocuments([]);
+        setSelectedDocumentIds(new Set());
+        onUploadSuccess('Alle Belege gelöscht.');
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Löschen fehlgeschlagen.';
+        onUploadError(message);
+      }
+    })();
+  }, [documents.length, onUploadError, onUploadSuccess, setDocuments]);
 
   const handleArchive = () => {
     if (window.confirm(`Möchten Sie ${selectedDocumentIds.size} Beleg(e) wirklich archivieren?`)) {
@@ -244,13 +312,24 @@ const DocumentsView: React.FC<DocumentsViewProps> = ({ documents, setDocuments, 
     <>
       <div className="flex flex-col md:flex-row justify-between md:items-center mb-6 gap-4">
         <h2 className="text-3xl font-bold text-slate-800">{viewTitle}</h2>
-        <button
-          onClick={() => setIsUploadModalOpen(true)}
-          className="flex items-center justify-center bg-blue-600 text-white font-semibold py-2 px-5 rounded-lg hover:bg-blue-700 transition duration-300 shadow-sm w-full md:w-auto"
-        >
-          <PlusIcon className="w-5 h-5 mr-2" />
-          Beleg hinzufügen
-        </button>
+        <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto">
+          <button
+            onClick={() => setIsUploadModalOpen(true)}
+            className="flex items-center justify-center bg-blue-600 text-white font-semibold py-2 px-5 rounded-lg hover:bg-blue-700 transition duration-300 shadow-sm w-full"
+          >
+            <PlusIcon className="w-5 h-5 mr-2" />
+            Beleg hinzufügen
+          </button>
+          {documents.length > 0 && (
+            <button
+              onClick={handleDeleteAll}
+              className="flex items-center justify-center border border-rose-200 bg-rose-50 text-rose-700 font-semibold py-2 px-5 rounded-lg hover:bg-rose-100 transition duration-300 shadow-sm w-full"
+            >
+              <TrashIcon className="w-5 h-5 mr-2" />
+              Alle Belege löschen
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="grid gap-4 mb-6 md:grid-cols-2 xl:grid-cols-4">
@@ -464,6 +543,8 @@ const DocumentsView: React.FC<DocumentsViewProps> = ({ documents, setDocuments, 
                                         onUpdateStorage={handleUpdateStorage}
                                         onReanalyze={handleReanalyze}
                                         isReanalyzing={reanalyzingDocumentIds.includes(doc.id)}
+                                        onCompareDuplicate={onCompareDuplicate}
+                                        onDelete={handleDeleteSingle}
                                       />
                                     ))}
                                 </div>
@@ -489,6 +570,9 @@ const DocumentsView: React.FC<DocumentsViewProps> = ({ documents, setDocuments, 
           rules={rules}
           onRuleSuggestion={onRuleSuggestion}
           apiKey={apiKey}
+          onUploadSuccess={onUploadSuccess}
+          onUploadError={onUploadError}
+          onDuplicateDetected={onDuplicateDetected}
         />
       )}
     </>

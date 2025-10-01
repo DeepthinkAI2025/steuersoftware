@@ -5,6 +5,9 @@ import LoginView from './components/LoginView';
 import RuleSuggestionToast from './components/RuleSuggestionToast';
 import DeadlineNotification from './components/DeadlineNotification';
 import ErrorBoundary from './components/ErrorBoundary';
+import DuplicateComparisonModal from './components/DuplicateComparisonModal';
+import DuplicateToast from './components/DuplicateToast';
+import ApiErrorFallback from './components/ApiErrorFallback';
 import { Document, DocumentStatus, View, Rule, InvoiceType, RuleSuggestion, NotificationSettings, Deadline, UserProfile, DocumentFilter, AccountingTransaction, TransactionStatus, TransactionSource, TaskItem, TaskStatus, TaskPriority, StorageLocation, StorageLocationType, DEFAULT_DIGITAL_STORAGE_ID } from './types';
 import { getDeadlines } from './services/deadlineService';
 import { analyzeDocument, getDocumentStatusFromAnalysis, buildOcrMetadataFromAnalysis } from './services/geminiService';
@@ -154,18 +157,28 @@ const loadStorageLocationsFromStorage = (): StorageLocation[] => {
 const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => sessionStorage.getItem('isAuthenticated') === 'true');
   const [documents, setDocuments] = useState<Document[]>([]);
+  const [documentsLoaded, setDocumentsLoaded] = useState(false);
+  const [documentsError, setDocumentsError] = useState<string | null>(null);
   const [activeView, setActiveView] = useState<View>(View.DOCUMENTS);
   const [activeFilter, setActiveFilter] = useState<DocumentFilter | null>(null);
   const [rules, setRules] = useState<Rule[]>(initialRules);
   const [ruleSuggestion, setRuleSuggestion] = useState<RuleSuggestion | null>(null);
+  const [duplicateToast, setDuplicateToast] = useState<Document | null>(null);
+  const [duplicateComparison, setDuplicateComparison] = useState<{ isOpen: boolean, documents: [Document, Document] | null }>({ isOpen: false, documents: null });
+  const [uploadToast, setUploadToast] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   
   // App State for responsiveness
   const [isDesktopSidebarOpen, setIsDesktopSidebarOpen] = useState<boolean>(true);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
   
   // API Keys, Chat State, and Profile
-  const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem('geminiApiKey') || '');
-  const [lexofficeApiKey, setLexofficeApiKey] = useState<string>(() => localStorage.getItem('lexofficeApiKey') || '');
+  // Environment bereitgestellte Keys (nicht überschreiben, nur verwenden falls kein gespeicherter Benutzer-Key existiert)
+  const ENV = (import.meta as any).env || {};
+  const GEMINI_ENV_KEY: string | undefined = ENV.VITE_GEMINI_API_KEY || ENV.VITE_GEMINI_KEY;
+  const LEXOFFICE_ENV_KEY: string | undefined = ENV.VITE_LEXOFFICE_API_KEY;
+
+  const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem('geminiApiKey') || GEMINI_ENV_KEY || '');
+  const [lexofficeApiKey, setLexofficeApiKey] = useState<string>(() => localStorage.getItem('lexofficeApiKey') || LEXOFFICE_ENV_KEY || '');
   const [lexofficeLiveEnabled, setLexofficeLiveEnabled] = useState<boolean>(() => {
     if (!isBrowser) return getLexofficeLiveMode();
     const stored = localStorage.getItem('lexofficeLiveMode');
@@ -182,6 +195,67 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('userProfile');
     return saved ? JSON.parse(saved) : { name: 'Admin User', taxId: '', vatId: '', taxNumber: '', companyForm: '', profilePicture: undefined };
   });
+
+  const fetchDocuments = useCallback(async () => {
+    setDocumentsLoaded(false);
+    try {
+      setDocumentsError(null);
+      const res = await fetch('/api/documents');
+      const errorText = res.ok ? null : await res.text();
+      if (!res.ok) {
+        throw new Error(errorText || `HTTP ${res.status} ${res.statusText}`);
+      }
+      const payload = await res.json();
+      if (Array.isArray(payload)) {
+        const normalized: Document[] = payload.map((d: any) => ({
+          id: d.id,
+          name: d.name,
+          date: new Date(d.date),
+          year: d.year,
+          quarter: d.quarter,
+          source: d.source,
+          status: d.status,
+          fileUrl: d.fileUrl,
+          invoiceType: d.invoiceType || InvoiceType.INCOMING,
+          vendor: d.vendor,
+          totalAmount: d.totalAmount,
+          vatAmount: d.vatAmount,
+          invoiceNumber: d.invoiceNumber,
+          taxCategory: d.taxCategory,
+          errorMessage: d.errorMessage,
+          storageLocationId: d.storageLocationId,
+          tags: d.tags || [],
+          linkedTransactionIds: d.linkedTransactionIds || [],
+          textContent: d.textContent,
+          fileHash: d.fileHash,
+          duplicateOfId: d.duplicateOfId,
+          duplicateIgnored: d.duplicateIgnored,
+        }));
+        setDocuments(normalized.sort((a,b) => b.date.getTime() - a.date.getTime()));
+
+        const potentialDuplicate = normalized.find(d => d.status === DocumentStatus.POTENTIAL_DUPLICATE && !d.duplicateIgnored);
+        if (potentialDuplicate) {
+          setDuplicateToast(potentialDuplicate);
+        } else {
+          setDuplicateToast(null);
+        }
+      } else {
+        setDocuments([]);
+        setDuplicateToast(null);
+      }
+    } catch (e) {
+      console.error('Dokumente laden fehlgeschlagen:', e);
+      const message = e instanceof Error ? e.message : 'Unbekannter Fehler beim Laden der Dokumente.';
+      setDocumentsError(message);
+    } finally {
+      setDocumentsLoaded(true);
+    }
+  }, [setDocumentsLoaded, setDocumentsError, setDocuments, setDuplicateToast]);
+
+  useEffect(() => {
+    // Initial Dokumente aus Backend laden
+    fetchDocuments();
+  }, [fetchDocuments]);
 
   useEffect(() => {
     const storedPrompt = localStorage.getItem('chatSystemPrompt');
@@ -410,6 +484,70 @@ const App: React.FC = () => {
     setRuleSuggestion(null);
   };
 
+  const handleDuplicateCompare = (doc: Document) => {
+    if (doc.duplicateOfId) {
+      const duplicateDoc = documents.find(d => d.id === doc.duplicateOfId);
+      if (duplicateDoc) {
+        setDuplicateComparison({ isOpen: true, documents: [doc, duplicateDoc] });
+      }
+    }
+    setDuplicateToast(null);
+  };
+
+  const handleDuplicateDismiss = () => {
+    setDuplicateToast(null);
+  };
+
+  const handleDuplicateIgnore = async (id: string) => {
+    try {
+      const res = await fetch(`/api/documents/${id}/ignore-duplicate`, { method: 'POST' });
+      if (res.ok) {
+        setDocuments(prev => prev.map(d => d.id === id ? { ...d, duplicateIgnored: true, status: DocumentStatus.OK } : d));
+        setDuplicateComparison({ isOpen: false, documents: null });
+      }
+    } catch (e) {
+      console.error('Ignore duplicate failed', e);
+    }
+  };
+
+  const handleDuplicateDelete = async (id: string) => {
+    try {
+      const res = await fetch(`/api/documents/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        setDocuments(prev => prev.filter(d => d.id !== id));
+        setDuplicateComparison({ isOpen: false, documents: null });
+      }
+    } catch (e) {
+      console.error('Delete document failed', e);
+    }
+  };
+
+  const handleDuplicateKeepBoth = async (id: string) => {
+    try {
+      const res = await fetch(`/api/documents/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ duplicateIgnored: true }) });
+      if (res.ok) {
+        setDocuments(prev => prev.map(d => d.id === id ? { ...d, duplicateIgnored: true, status: DocumentStatus.OK } : d));
+        setDuplicateComparison({ isOpen: false, documents: null });
+      }
+    } catch (e) {
+      console.error('Keep both failed', e);
+    }
+  };
+
+  const handleUploadSuccess = (message: string) => {
+    setUploadToast({ type: 'success', message });
+    setTimeout(() => setUploadToast(null), 5000);
+  };
+
+  const handleUploadError = (message: string) => {
+    setUploadToast({ type: 'error', message });
+    setTimeout(() => setUploadToast(null), 5000);
+  };
+
+  const handleDuplicateDetected = (doc: Document) => {
+    setDuplicateToast(doc);
+  };
+
   const handleImportFromLexoffice = async (dateRange: { start: Date; end: Date }, includeDocuments: boolean) => {
     const importResult = await importFromLexoffice({
       apiKey: lexofficeApiKey || undefined,
@@ -549,6 +687,10 @@ const App: React.FC = () => {
         setStorageLocations={setStorageLocations}
         onReanalyzeDocument={handleReanalyzeDocument}
         reanalyzingDocumentIds={reanalyzingDocumentIds}
+        onUploadSuccess={handleUploadSuccess}
+        onUploadError={handleUploadError}
+        onDuplicateDetected={handleDuplicateDetected}
+        onCompareDuplicate={handleDuplicateCompare}
       />
     </Suspense>
   );
@@ -590,6 +732,25 @@ const App: React.FC = () => {
         />
         <main className="flex-1 overflow-x-hidden overflow-y-auto bg-slate-50 p-4 sm:p-6 lg:p-8 relative">
            {activeNotification && <DeadlineNotification deadline={activeNotification} onClose={() => setActiveNotification(null)} />}
+          {documentsError && (
+            <div className="mb-4">
+              <ApiErrorFallback
+                title="Dokumente konnten nicht geladen werden"
+                error={{
+                  message: 'Die Dokument-API ist derzeit nicht erreichbar. Läuft der Backend-Server (npm run server)?',
+                  details: documentsError,
+                }}
+                onRetry={fetchDocuments}
+                onDismiss={() => setDocumentsError(null)}
+                showDetails
+              />
+            </div>
+          )}
+          {!documentsLoaded && !documentsError && (
+            <div className="mb-4 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+              <p className="text-sm text-slate-500">Dokumente werden geladen...</p>
+            </div>
+          )}
           <Suspense fallback={<div className="flex items-center justify-center h-64"><div className="text-slate-500">Lade...</div></div>}>
             {(activeView === View.DOCUMENTS || activeView === View.BUCHHALTUNG_BELEGE) && renderDocumentsView()}
             {activeView === View.SETTINGS && (
@@ -606,6 +767,8 @@ const App: React.FC = () => {
                 chatSystemPrompt={chatSystemPrompt}
                 setChatSystemPrompt={setChatSystemPrompt}
                 DEFAULT_CHAT_PROMPT={DEFAULT_CHAT_PROMPT}
+                geminiEnvProvided={Boolean(GEMINI_ENV_KEY)}
+                lexofficeEnvProvided={Boolean(LEXOFFICE_ENV_KEY)}
               />
             )}
             {activeView === View.ANALYSIS && <AnalysisView documents={documents} />}
@@ -661,6 +824,32 @@ const App: React.FC = () => {
           onAccept={handleAcceptSuggestion}
           onDismiss={handleDismissSuggestion}
         />
+      )}
+      {duplicateToast && (
+        <DuplicateToast
+          document={duplicateToast}
+          onCompare={() => handleDuplicateCompare(duplicateToast)}
+          onDismiss={handleDuplicateDismiss}
+        />
+      )}
+      {duplicateComparison.isOpen && duplicateComparison.documents && (
+        <DuplicateComparisonModal
+          documents={duplicateComparison.documents}
+          onClose={() => setDuplicateComparison({ isOpen: false, documents: null })}
+          onIgnore={handleDuplicateIgnore}
+          onDelete={handleDuplicateDelete}
+          onKeepBoth={handleDuplicateKeepBoth}
+        />
+      )}
+      {uploadToast && (
+        <div className={`fixed bottom-5 right-5 w-full max-w-md rounded-xl shadow-lg border p-4 z-50 ${uploadToast.type === 'success' ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
+          <p className={`text-sm font-semibold ${uploadToast.type === 'success' ? 'text-green-900' : 'text-red-900'}`}>
+            {uploadToast.type === 'success' ? 'Erfolg' : 'Fehler'}
+          </p>
+          <p className={`mt-1 text-sm ${uploadToast.type === 'success' ? 'text-green-700' : 'text-red-700'}`}>
+            {uploadToast.message}
+          </p>
+        </div>
       )}
       {documentToView && (
         <Suspense fallback={<div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"><div className="text-slate-500">Lade...</div></div>}>

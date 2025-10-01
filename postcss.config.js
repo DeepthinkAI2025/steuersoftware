@@ -1,6 +1,7 @@
-import tailwindcss from '@tailwindcss/postcss';
-import autoprefixer from 'autoprefixer';
-
+// Tailwind v4: empfohlenes Objekt-Plugin-Format
 export default {
-  plugins: [tailwindcss(), autoprefixer()],
+  plugins: {
+    '@tailwindcss/postcss': {},
+    autoprefixer: {},
+  },
 };

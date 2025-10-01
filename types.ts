@@ -104,6 +104,7 @@ export interface Document {
   vatAmount?: number;
   invoiceNumber?: string;
   invoiceType: InvoiceType;
+  documentType?: 'Rechnung' | 'Angebot' | 'Bestellbestätigung' | 'Unbekannt';
   taxCategory?: string;
   lexoffice?: {
     status: LexofficeStatus;
@@ -114,12 +115,16 @@ export interface Document {
   tags?: string[];
   linkedTransactionIds?: string[];
   ocrMetadata?: DocumentOcrMetadata;
+  fileHash?: string;
+  duplicateOfId?: string;
+  duplicateIgnored?: boolean;
 }
 
 export interface GeminiAnalysisResult {
     isInvoice: boolean;
     isOrderConfirmation: boolean;
     isEmailBody: boolean;
+    documentType: 'Rechnung' | 'Angebot' | 'Bestellbestätigung' | 'Unbekannt';
     documentDate: string; // ISO 8601 format
     textContent: string;
     vendor: string;

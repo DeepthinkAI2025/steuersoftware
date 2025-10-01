@@ -97,12 +97,13 @@ const LexofficeView: React.FC<LexofficeViewProps> = ({ documents, setDocuments, 
   const initialRange = computeRange('current-month');
 
   const envLexofficeApiKey = (META_ENV.VITE_LEXOFFICE_API_KEY ?? '').trim();
-  const isLiveModeEnabled = (META_ENV.VITE_LEXOFFICE_ENABLE_REAL_API ?? 'false') === 'true';
+  const isLiveModeFlag = (META_ENV.VITE_LEXOFFICE_ENABLE_REAL_API ?? 'false') === 'true';
+  const isLiveModeEnabled = isLiveModeFlag || Boolean(envLexofficeApiKey);
 
   const [startDate, setStartDate] = useState(() => formatInputDate(initialRange.start));
   const [endDate, setEndDate] = useState(() => formatInputDate(initialRange.end));
   const [rangePreset, setRangePreset] = useState<RangePreset>('current-month');
-  const [includeDocuments, setIncludeDocuments] = useState(true);
+  const [includeDocuments, setIncludeDocuments] = useState(true); // Immer default: Belege mit importieren
   const [isSending, setIsSending] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
@@ -297,11 +298,24 @@ const LexofficeView: React.FC<LexofficeViewProps> = ({ documents, setDocuments, 
 
       const existingIds = new Set(documents.map(doc => doc.id));
       const existingInvoiceNumbers = new Set(documents.map(doc => doc.invoiceNumber).filter(Boolean) as string[]);
+      
+      const DEBUG_ENABLED = (import.meta as any).env?.VITE_LEXOFFICE_DEBUG === 'true';
+      if (DEBUG_ENABLED) {
+        console.log('[LexofficeView] Duplikatfilter-Analyse', {
+          kandidaten: candidateDocuments.length,
+          existingIds: existingIds.size,
+          existingInvoiceNumbers: existingInvoiceNumbers.size,
+          candidates: candidateDocuments.map(d => ({ id: d.id, invoiceNumber: d.invoiceNumber, filename: d.name }))
+        });
+      }
+      
       const additions = candidateDocuments.filter(doc => {
-        if (existingIds.has(doc.id)) return false;
-        const invoiceNumber = doc.invoiceNumber;
-        if (invoiceNumber && existingInvoiceNumbers.has(invoiceNumber)) return false;
-        return true;
+        const hasId = existingIds.has(doc.id);
+        const hasInvoice = doc.invoiceNumber && existingInvoiceNumbers.has(doc.invoiceNumber);
+        if (DEBUG_ENABLED && (hasId || hasInvoice)) {
+          console.log('[LexofficeView] Duplikat gefiltert', { id: doc.id, invoiceNumber: doc.invoiceNumber, filename: doc.name, hasId, hasInvoice });
+        }
+        return !hasId && !hasInvoice;
       });
 
       if (additions.length > 0) {
@@ -523,6 +537,12 @@ const LexofficeView: React.FC<LexofficeViewProps> = ({ documents, setDocuments, 
 
       <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-200">
         <h3 className="text-lg font-semibold text-slate-800 mb-4">1. Zeitraum auswählen</h3>
+        {isLiveModeEnabled && (
+          <div className="mb-4 rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-xs text-emerald-800 flex items-center justify-between gap-4">
+            <span className="font-semibold">Live-Modus aktiv – API-Schlüssel aus Umgebung wird verwendet.</span>
+            {envLexofficeApiKey && <span className="rounded bg-emerald-600 text-white px-2 py-0.5 text-[10px] tracking-wide">ENV KEY</span>}
+          </div>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="md:col-span-3">
             <label htmlFor="range-preset" className="block text-sm font-medium text-slate-700">Voreinstellung</label>
@@ -569,7 +589,7 @@ const LexofficeView: React.FC<LexofficeViewProps> = ({ documents, setDocuments, 
       </div>
       
       <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-200">
-        <h3 className="text-lg font-semibold text-slate-800 mb-4">2. Übertragung starten</h3>
+  <h3 className="text-lg font-semibold text-slate-800 mb-4">2. Belege an Lexoffice übertragen</h3>
         <div className="p-4 bg-slate-50 rounded-lg text-center">
             <p className="text-slate-600">
                 <span className="font-bold text-2xl text-blue-600">{documentsToSend.length}</span> Beleg(e) im ausgewählten Zeitraum zum Senden bereit.
@@ -601,15 +621,15 @@ const LexofficeView: React.FC<LexofficeViewProps> = ({ documents, setDocuments, 
           {isSending ? (
             'Übertragung läuft...'
           ) : (
-            `Sende ${documentsToSend.length} Beleg(e) an LexOffice`
+            `Sende ${documentsToSend.length} Beleg(e) an Lexoffice${isLiveModeEnabled ? '' : ' (Simulation)'}`
           )}
         </button>
       </div>
 
       <div className="bg-white p-4 sm:p-6 rounded-xl shadow-sm border border-slate-200">
-        <h3 className="text-lg font-semibold text-slate-800 mb-1">3. Belege &amp; Zahlungen aus Lexoffice importieren (Beta)</h3>
+        <h3 className="text-lg font-semibold text-slate-800 mb-1">3. Umsätze &amp; Belege aus Lexoffice importieren</h3>
         <p className="text-sm text-slate-500 mb-4">
-          Wir spielen einen Import aus Lexoffice durch, um Transaktionen und – falls gewünscht – zugehörige Belege aus dem ausgewählten Zeitraum zu synchronisieren.
+          Importiert alle Umsätze (Einnahmen & Ausgaben) und optional zugehörige Belege im gewählten Zeitraum. Standard: Belege werden mit übernommen.
         </p>
         {importFeedback && (
           <div className={`mb-4 rounded-md p-3 text-sm ${importFeedback.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
@@ -619,14 +639,14 @@ const LexofficeView: React.FC<LexofficeViewProps> = ({ documents, setDocuments, 
         <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
           Zeitraum: {selectedRange ? `${new Intl.DateTimeFormat('de-DE').format(selectedRange.start)} – ${new Intl.DateTimeFormat('de-DE').format(selectedRange.end)}` : 'Bitte gültige Daten wählen'}
         </div>
-        <label className="mb-4 flex items-center gap-2 text-sm text-slate-600">
+        <label className="mb-4 flex items-center gap-2 text-sm text-slate-600 select-none">
           <input
             type="checkbox"
             checked={includeDocuments}
             onChange={event => setIncludeDocuments(event.target.checked)}
             className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
           />
-          Belege gemeinsam mit den Transaktionen übernehmen
+          Belege mit importieren
         </label>
         <div className="mb-4 rounded-lg border border-dashed border-emerald-300 bg-emerald-50 p-4">
           <p className="text-sm font-semibold text-emerald-800">Schnellstart: Komplettimport Jahr 2023</p>
@@ -652,7 +672,11 @@ const LexofficeView: React.FC<LexofficeViewProps> = ({ documents, setDocuments, 
           ) : (
             <SparklesIcon className="h-5 w-5" />
           )}
-          {isImporting ? 'Import läuft…' : 'Import jetzt simulieren'}
+          {isImporting
+            ? 'Import läuft…'
+            : isLiveModeEnabled
+              ? `Alle Umsätze${includeDocuments ? ' + Belege' : ''} importieren`
+              : `Simulation starten (${includeDocuments ? 'Umsätze + Belege' : 'nur Umsätze'})`}
         </button>
 
         {importSummary && (
@@ -710,6 +734,19 @@ const LexofficeView: React.FC<LexofficeViewProps> = ({ documents, setDocuments, 
                 </li>
               ))}
             </ul>
+          </div>
+        )}
+        {((import.meta as any).env?.VITE_LEXOFFICE_DEBUG === 'true') && (fetchedDocumentsCount !== null || addedDocumentsCount !== null) && (
+          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
+            <p className="mb-3 text-sm font-semibold text-amber-800">🐛 Debug: Dokumentenverarbeitung</p>
+            <div className="text-xs text-amber-700 space-y-1">
+              <div>Gefetchte Dokumente aus Lexoffice: {fetchedDocumentsCount ?? '?'}</div>
+              <div>Neue Dokumente hinzugefügt: {addedDocumentsCount ?? '?'}</div>
+              <div>Aktuell gespeicherte Dokumente: {documents.length}</div>
+              <div className="mt-2 font-mono text-[10px] text-amber-600">
+                Siehe Browser-Konsole für Details zu Duplikatfiltern und Rohdaten.
+              </div>
+            </div>
           </div>
         )}
       </div>
